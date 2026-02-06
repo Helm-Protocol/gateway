@@ -1,0 +1,28 @@
+# === Anonymity-First Git Attributes ===
+
+# Normalize line endings to LF — prevents OS fingerprinting
+* text=auto eol=lf
+
+# Source files
+*.rs text eol=lf
+*.toml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.tpl text eol=lf
+
+# Strip metadata from binary files
+*.png binary -diff
+*.jpg binary -diff
+*.jpeg binary -diff
+*.gif binary -diff
+*.ico binary -diff
+*.pdf binary -diff
+*.wasm binary -diff
+
+# Prevent accidental diff of compiled artifacts
+*.so binary
+*.dylib binary
+*.dll binary
