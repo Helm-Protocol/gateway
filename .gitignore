@@ -33,8 +33,4 @@ secrets.yaml
 token.txt
 
 # Prevent personal config leaks
-.claude/.credentials
 .local/
-
-# AI tooling config — keep local only
-CLAUDE.md

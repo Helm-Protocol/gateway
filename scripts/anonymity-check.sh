@@ -19,7 +19,7 @@ echo ""
 echo -n "[1/6] Git identity... "
 GIT_NAME=$(git config user.name)
 GIT_EMAIL=$(git config user.email)
-if [[ "$GIT_EMAIL" == *"noreply"* ]] || [[ "$GIT_EMAIL" == *"users.noreply.github.com"* ]]; then
+if [[ "$GIT_EMAIL" == "noreply@helm-protocol.org" ]]; then
     echo -e "${GREEN}OK${NC} ($GIT_NAME <$GIT_EMAIL>)"
 else
     echo -e "${RED}FAIL${NC} — Email '$GIT_EMAIL' may expose identity"

@@ -32,7 +32,7 @@ chmod +x .git/hooks/pre-push
 ### Handoff
 
 If you are taking over development:
-1. Read `CLAUDE.md` thoroughly
+1. Read `CONTRIBUTING.md` thoroughly
 2. Follow the setup steps above
 3. Never attempt to identify previous contributors
 4. Continue the work — the code speaks for itself
