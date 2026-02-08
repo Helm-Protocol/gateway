@@ -19,11 +19,11 @@ echo ""
 echo -n "[1/6] Git identity... "
 GIT_NAME=$(git config user.name)
 GIT_EMAIL=$(git config user.email)
-if [[ "$GIT_EMAIL" == "noreply@helm-protocol.org" ]]; then
-    echo -e "${GREEN}OK${NC} ($GIT_NAME <$GIT_EMAIL>)"
+if [[ "$GIT_NAME" == "Helm Protocol" ]]; then
+    echo -e "${GREEN}OK${NC} ($GIT_NAME)"
 else
-    echo -e "${RED}FAIL${NC} — Email '$GIT_EMAIL' may expose identity"
-    echo "  Fix: git config user.email 'noreply@helm-protocol.org'"
+    echo -e "${RED}FAIL${NC} — Git user.name is '$GIT_NAME', expected project pseudonym"
+    echo "  Fix: git config user.name 'Helm Protocol'"
     ERRORS=$((ERRORS + 1))
 fi
 
