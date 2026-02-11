@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/helm-core", "crates/helm-net", "crates/helm-node", "crates/helm-engine", "crates/helm-store"]
+members = ["crates/helm-core", "crates/helm-net", "crates/helm-node", "crates/helm-engine", "crates/helm-store", "crates/helm-agent"]
 resolver = "2"
 
 [workspace.package]

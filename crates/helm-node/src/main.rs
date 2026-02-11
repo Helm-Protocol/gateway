@@ -74,6 +74,7 @@ async fn cmd_run(
     banner::print_module_status("helm-net", "libp2p transport (GossipSub+Kademlia)", true);
     banner::print_module_status("helm-engine", "QKV-G attention + GRG codec", true);
     banner::print_module_status("helm-store", "KV store + CRDT + Merkle DAG", true);
+    banner::print_module_status("helm-agent", "Agent framework + Socratic Claw", true);
     println!();
 
     tracing::info!("Helm Protocol v{}", env!("CARGO_PKG_VERSION"));
@@ -101,6 +102,12 @@ fn cmd_status() -> Result<()> {
     banner::print_info("Transport", "libp2p 0.54 (Noise+Yamux)");
     banner::print_info("Discovery", "mDNS + Kademlia DHT");
     banner::print_info("Messaging", "GossipSub");
+
+    banner::print_section("Agent Framework");
+    banner::print_info("Registry", "max 1024 agents");
+    banner::print_info("Socratic Claw", "G-threshold 0.4 (Gap-Aware Decision)");
+    banner::print_info("MLA Gap Repo", "64→8 latent compression (8x)");
+    banner::print_info("Scheduler", "Priority-based with starvation prevention");
 
     banner::print_section("Codec Pipeline");
     banner::print_info("Layer 1", "Golomb-Rice (source coding / compression)");
@@ -215,6 +222,7 @@ fn cmd_info() -> Result<()> {
     banner::print_module_status("helm-net", "libp2p transport layer", true);
     banner::print_module_status("helm-engine", "QKV-G + GRG distributed codec", true);
     banner::print_module_status("helm-store", "KV store + CRDT + Merkle DAG + Sync", true);
+    banner::print_module_status("helm-agent", "Agent framework + Socratic Claw + MLA Gap Repo", true);
     banner::print_module_status("helm-node", "CLI + binary entry point", true);
 
     banner::print_section("Architecture");
@@ -222,6 +230,13 @@ fn cmd_info() -> Result<()> {
     banner::print_info("Control Plane", "QKV-G attention for anomaly/routing/security");
     banner::print_info("Edge API", "External agents pay to use (15% -> Helm treasury)");
     banner::print_info("Core API", "Hidden autonomous agent brain + security");
+
+    banner::print_section("Socratic Claw");
+    banner::print_info("Interceptor", "Gap-Aware Decision Process at execution entry");
+    banner::print_info("G-threshold", "0.4 (halt when knowledge gap > 40%)");
+    banner::print_info("MLA", "Down-Projection (64→8) + Up-Projection (8→64)");
+    banner::print_info("Gap Repo", "Compressed ignorance storage + meta-cognition");
+    banner::print_info("Self-Train", "Absorb answers → re-evaluate G → resume");
 
     println!();
     Ok(())

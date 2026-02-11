@@ -1,0 +1,21 @@
+[package]
+name = "helm-agent"
+description = "Helm Protocol — Autonomous Agent Framework"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+helm-core = { path = "../helm-core" }
+helm-net = { path = "../helm-net" }
+helm-engine = { path = "../helm-engine" }
+helm-store = { path = "../helm-store" }
+
+tokio.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+async-trait = "0.1"
+rand.workspace = true
