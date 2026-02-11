@@ -1,0 +1,18 @@
+[package]
+name = "helm-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Helm Protocol node binary"
+
+[[bin]]
+name = "helm"
+path = "src/main.rs"
+
+[dependencies]
+helm-core = { path = "../helm-core" }
+helm-net = { path = "../helm-net" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }

@@ -1,11 +1,13 @@
-[package]
-name = "helm"
+[workspace]
+members = ["crates/helm-core", "crates/helm-net", "crates/helm-node"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "Experimental P2P protocol for AI and Human agent communication"
 license = "MIT"
 
-[dependencies]
+[workspace.dependencies]
 # P2P networking
 libp2p = { version = "0.54", features = [
     "tokio",
@@ -16,6 +18,7 @@ libp2p = { version = "0.54", features = [
     "yamux",
     "identify",
     "mdns",
+    "macros",
 ] }
 
 # Async runtime
@@ -28,6 +31,7 @@ rand = "0.8"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "0.8"
 
 # Logging
 tracing = "0.1"
@@ -35,6 +39,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Error handling
 anyhow = "1"
+thiserror = "1"
+
+# Async
+futures = "0.3"
 
 [profile.release]
 opt-level = 3

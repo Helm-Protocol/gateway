@@ -6,9 +6,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock* ./
-COPY src/ src/
+COPY crates/ crates/
 
-RUN cargo build --release
+RUN cargo build --release -p helm-node
 
 # Runtime
 FROM debian:bookworm-slim
