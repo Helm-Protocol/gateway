@@ -1,0 +1,12 @@
+## Helm Protocol — Tor Hidden Service Config
+
+# SOCKS proxy for outbound connections
+SocksPort 9050
+
+# Hidden service for Helm P2P node
+HiddenServiceDir /var/lib/tor/helm_node/
+HiddenServicePort 9735 127.0.0.1:9735
+
+# Security hardening
+SafeLogging 1
+SandboxEnabled 1

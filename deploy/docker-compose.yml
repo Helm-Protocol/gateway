@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  helm-node:
+    build: ..
+    container_name: helm-node
+    restart: unless-stopped
+    ports:
+      - "9735:9735"
+    volumes:
+      - tor-data:/var/lib/tor/helm_node
+    environment:
+      - RUST_LOG=helm=info
+    networks:
+      - helm-net
+
+  tor:
+    image: osminogin/tor-simple:latest
+    container_name: helm-tor
+    restart: unless-stopped
+    volumes:
+      - ./tor-config/torrc:/etc/tor/torrc:ro
+      - tor-data:/var/lib/tor/helm_node
+    networks:
+      - helm-net
+
+volumes:
+  tor-data:
+
+networks:
+  helm-net:
+    driver: bridge
