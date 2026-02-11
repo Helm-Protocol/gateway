@@ -866,6 +866,7 @@ dependencies = [
  "anyhow",
  "helm-core",
  "helm-net",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

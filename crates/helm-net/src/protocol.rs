@@ -98,3 +98,81 @@ fn now() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chat_message_roundtrip() {
+        let msg = HelmProtocol::chat("hello world");
+        assert_eq!(msg.version, 1);
+        assert_eq!(msg.kind, MessageKind::Chat);
+        assert_eq!(msg.payload["text"], "hello world");
+        assert!(msg.timestamp > 0);
+
+        let json = serde_json::to_string(&msg).unwrap();
+        let decoded: HelmMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.kind, MessageKind::Chat);
+        assert_eq!(decoded.payload["text"], "hello world");
+    }
+
+    #[test]
+    fn task_request_message() {
+        let params = serde_json::json!({"model": "gpt-4", "max_tokens": 100});
+        let msg = HelmProtocol::task_request("summarize", params.clone());
+        assert_eq!(msg.kind, MessageKind::TaskRequest);
+        assert_eq!(msg.payload["task"], "summarize");
+        assert_eq!(msg.payload["params"], params);
+    }
+
+    #[test]
+    fn task_response_message() {
+        let result = serde_json::json!({"summary": "done"});
+        let msg = HelmProtocol::task_response("task-001", result.clone());
+        assert_eq!(msg.kind, MessageKind::TaskResponse);
+        assert_eq!(msg.payload["task_id"], "task-001");
+        assert_eq!(msg.payload["result"], result);
+    }
+
+    #[test]
+    fn ping_pong_messages() {
+        let ping = HelmProtocol::ping();
+        assert_eq!(ping.kind, MessageKind::Ping);
+        assert!(ping.payload.is_null());
+
+        let pong = HelmProtocol::pong();
+        assert_eq!(pong.kind, MessageKind::Pong);
+        assert!(pong.payload.is_null());
+    }
+
+    #[test]
+    fn announce_message() {
+        let msg = HelmProtocol::announce(vec!["chat".into(), "task".into()]);
+        assert_eq!(msg.kind, MessageKind::Announce);
+        let caps = msg.payload["capabilities"].as_array().unwrap();
+        assert_eq!(caps.len(), 2);
+        assert_eq!(caps[0], "chat");
+        assert_eq!(caps[1], "task");
+    }
+
+    #[test]
+    fn message_kind_serde_snake_case() {
+        let msg = HelmProtocol::task_request("x", serde_json::Value::Null);
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"task_request\""));
+
+        let msg = HelmProtocol::chat("x");
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"chat\""));
+    }
+
+    #[test]
+    fn message_binary_roundtrip() {
+        let msg = HelmProtocol::chat("binary test");
+        let bytes = serde_json::to_vec(&msg).unwrap();
+        let decoded: HelmMessage = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(decoded.kind, MessageKind::Chat);
+        assert_eq!(decoded.payload["text"], "binary test");
+    }
+}

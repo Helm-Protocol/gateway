@@ -72,3 +72,91 @@ impl Default for Discovery {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use libp2p::identity::Keypair;
+
+    fn random_peer() -> (PeerId, Multiaddr) {
+        let key = Keypair::generate_ed25519();
+        let peer_id = PeerId::from(key.public());
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/9000".parse().unwrap();
+        (peer_id, addr)
+    }
+
+    #[test]
+    fn add_and_get_peer() {
+        let mut disc = Discovery::new();
+        let (pid, addr) = random_peer();
+        disc.add_peer(pid, addr.clone());
+
+        assert_eq!(disc.peer_count(), 1);
+        let info = disc.get_peer(&pid).unwrap();
+        assert_eq!(info.peer_id, pid);
+        assert_eq!(info.addresses, vec![addr]);
+    }
+
+    #[test]
+    fn duplicate_address_not_added() {
+        let mut disc = Discovery::new();
+        let (pid, addr) = random_peer();
+        disc.add_peer(pid, addr.clone());
+        disc.add_peer(pid, addr.clone());
+
+        let info = disc.get_peer(&pid).unwrap();
+        assert_eq!(info.addresses.len(), 1);
+    }
+
+    #[test]
+    fn multiple_addresses_per_peer() {
+        let mut disc = Discovery::new();
+        let (pid, addr1) = random_peer();
+        let addr2: Multiaddr = "/ip4/192.168.1.1/tcp/9001".parse().unwrap();
+        disc.add_peer(pid, addr1);
+        disc.add_peer(pid, addr2);
+
+        let info = disc.get_peer(&pid).unwrap();
+        assert_eq!(info.addresses.len(), 2);
+    }
+
+    #[test]
+    fn remove_peer() {
+        let mut disc = Discovery::new();
+        let (pid, addr) = random_peer();
+        disc.add_peer(pid, addr);
+
+        disc.remove_peer(&pid);
+        assert_eq!(disc.peer_count(), 0);
+        assert!(disc.get_peer(&pid).is_none());
+    }
+
+    #[test]
+    fn known_peers_returns_all() {
+        let mut disc = Discovery::new();
+        let (p1, a1) = random_peer();
+        let (p2, a2) = random_peer();
+        disc.add_peer(p1, a1);
+        disc.add_peer(p2, a2);
+
+        let peers = disc.known_peers();
+        assert_eq!(peers.len(), 2);
+    }
+
+    #[test]
+    fn prune_stale_peers() {
+        let mut disc = Discovery::new();
+        let (pid, addr) = random_peer();
+        disc.add_peer(pid, addr);
+
+        // Zero duration = prune everything
+        disc.prune_stale(std::time::Duration::from_secs(0));
+        assert_eq!(disc.peer_count(), 0);
+    }
+
+    #[test]
+    fn default_is_empty() {
+        let disc = Discovery::default();
+        assert_eq!(disc.peer_count(), 0);
+    }
+}

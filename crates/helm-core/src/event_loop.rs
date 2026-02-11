@@ -25,7 +25,11 @@ impl EventLoop {
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        let listen_addr = format!("/ip4/0.0.0.0/tcp/{}", self.config.node.port).parse()?;
+        let listen_addr = format!(
+            "/ip4/{}/tcp/{}",
+            self.config.node.listen_addr, self.config.node.port
+        )
+        .parse()?;
         self.transport.listen_on(listen_addr)?;
 
         info!("Local PeerID: {}", self.transport.local_peer_id());

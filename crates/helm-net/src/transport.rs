@@ -14,7 +14,7 @@ use crate::protocol::HelmMessage;
 pub struct HelmBehaviour {
     pub gossipsub: gossipsub::Behaviour,
     pub kademlia: kad::Behaviour<kad::store::MemoryStore>,
-    pub mdns: mdns::tokio::Behaviour,
+    pub mdns: libp2p::swarm::behaviour::toggle::Toggle<mdns::tokio::Behaviour>,
     pub identify: identify::Behaviour,
 }
 
@@ -53,8 +53,18 @@ impl HelmTransport {
                 let kademlia =
                     kad::Behaviour::new(peer_id, kad::store::MemoryStore::new(peer_id));
 
-                let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), peer_id)
-                    .expect("valid mdns behaviour");
+                // mDNS may fail in containers / restricted environments — run without it
+                let mdns = match mdns::tokio::Behaviour::new(mdns::Config::default(), peer_id) {
+                    Ok(b) => {
+                        info!("mDNS enabled");
+                        Some(b)
+                    }
+                    Err(e) => {
+                        warn!("mDNS unavailable ({e}), continuing without local discovery");
+                        None
+                    }
+                }
+                .into();
 
                 let identify = identify::Behaviour::new(identify::Config::new(
                     "/helm/0.1.0".to_string(),
