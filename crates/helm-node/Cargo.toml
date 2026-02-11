@@ -12,10 +12,14 @@ path = "src/main.rs"
 [dependencies]
 helm-core = { path = "../helm-core" }
 helm-net = { path = "../helm-net" }
+helm-engine = { path = "../helm-engine" }
+helm-store = { path = "../helm-store" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+serde_json = { workspace = true }
+clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 serde_json = { workspace = true }

@@ -1,0 +1,42 @@
+{
+  "name": "@helm-protocol/helm",
+  "version": "0.1.0",
+  "description": "Helm Protocol — The Sovereign Agent Protocol. A decentralized P2P network for autonomous agents.",
+  "keywords": [
+    "helm",
+    "protocol",
+    "p2p",
+    "decentralized",
+    "autonomous-agent",
+    "crdt",
+    "distributed-systems",
+    "libp2p"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Helm-Protocol/Helm"
+  },
+  "bin": {
+    "helm": "bin/helm"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "files": [
+    "install.js",
+    "bin/"
+  ]
+}
