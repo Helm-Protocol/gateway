@@ -979,6 +979,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "helm-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "helm-net"
 version = "0.1.0"
 dependencies = [

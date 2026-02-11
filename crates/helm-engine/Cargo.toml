@@ -1,0 +1,20 @@
+[package]
+name = "helm-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Helm Engine: QKV-G attention + GRG distributed codec pipeline"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+futures = { workspace = true }
+async-trait = "0.1"
+rand = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
