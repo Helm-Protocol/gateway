@@ -217,7 +217,7 @@ impl Plugin for StorePlugin {
 
         // Periodic sync check
         if self.config.sync_interval_ticks > 0
-            && self.tick_count % self.config.sync_interval_ticks == 0
+            && self.tick_count.is_multiple_of(self.config.sync_interval_ticks)
         {
             debug!("StorePlugin: sync tick {}", self.tick_count);
             // In production, this would initiate sync with known peers.

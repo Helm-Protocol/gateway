@@ -178,7 +178,7 @@ impl<'a> MerkleCrdt<'a> {
     /// Get root hash as short hex string.
     pub fn root_short(&self) -> String {
         self.dag.root()
-            .map(|h| hash_short(h))
+            .map(hash_short)
             .unwrap_or_else(|| "none".to_string())
     }
 

@@ -10,10 +10,12 @@ use crate::agent::AgentId;
 
 /// Task priority levels for agent scheduling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum TaskPriority {
     /// Background tasks, lowest priority.
     Low = 0,
     /// Standard agent execution.
+    #[default]
     Normal = 1,
     /// Time-sensitive operations.
     High = 2,
@@ -21,11 +23,6 @@ pub enum TaskPriority {
     Critical = 3,
 }
 
-impl Default for TaskPriority {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
 
 /// Scheduler entry for a single agent.
 #[derive(Debug, Clone)]

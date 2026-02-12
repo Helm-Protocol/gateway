@@ -43,7 +43,7 @@ impl GolombCodec {
         }
         let mean: f64 = data.iter().map(|&b| b as f64).sum::<f64>() / data.len() as f64;
         // Optimal M ≈ ceil(mean * ln(2)) rounded to nearest power of 2
-        let optimal = ((mean * 0.6931).ceil() as u32).max(1).next_power_of_two();
+        let optimal = ((mean * std::f64::consts::LN_2).ceil() as u32).max(1).next_power_of_two();
         let m = optimal.clamp(2, 256);
         let k = m.trailing_zeros();
         Self { m, k }

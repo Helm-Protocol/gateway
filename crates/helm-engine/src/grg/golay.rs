@@ -41,7 +41,7 @@ impl GolayCodec {
 
     /// Compute overall parity bit (XOR of all bits).
     fn parity_bit(v: u32) -> u32 {
-        (v.count_ones() & 1) as u32
+        v.count_ones() & 1
     }
 
     /// Encode 12 data bits into a 24-bit extended Golay codeword.
@@ -139,7 +139,7 @@ impl GolayCodec {
         }
 
         let total_bits = data.len() * 8;
-        let num_words = (total_bits + 11) / 12;
+        let num_words = total_bits.div_ceil(12);
 
         let mut encoded = Vec::with_capacity(num_words * 3 + 4);
         encoded.extend_from_slice(&(data.len() as u32).to_be_bytes());
@@ -176,7 +176,7 @@ impl GolayCodec {
         ]) as usize;
 
         let codeword_bytes = &encoded[4..];
-        if codeword_bytes.len() % 3 != 0 {
+        if !codeword_bytes.len().is_multiple_of(3) {
             return Err(GolayError::Uncorrectable);
         }
 

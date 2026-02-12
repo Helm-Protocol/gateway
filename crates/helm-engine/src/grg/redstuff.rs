@@ -87,7 +87,7 @@ impl RedStuffCodec {
     /// Create a codec from a redundancy level with a target shard count.
     pub fn from_level(level: RedundancyLevel, target_data_shards: usize) -> Result<Self, RedStuffError> {
         let (d_ratio, p_ratio) = level.ratio();
-        let groups = (target_data_shards + d_ratio - 1) / d_ratio;
+        let groups = target_data_shards.div_ceil(d_ratio);
         let data_shards = groups * d_ratio;
         let parity_shards = groups * p_ratio;
         Self::new(data_shards, parity_shards)
@@ -100,7 +100,7 @@ impl RedStuffCodec {
         }
 
         // Calculate shard size (pad to equal sizes)
-        self.shard_size = (data.len() + self.data_shards - 1) / self.data_shards;
+        self.shard_size = data.len().div_ceil(self.data_shards);
         let padded_len = self.shard_size * self.data_shards;
 
         // Pad data to fit evenly
@@ -122,7 +122,7 @@ impl RedStuffCodec {
 
         // Generate parity shards using XOR across data shard groups
         let (d_ratio, _) = self.parity_group_size();
-        let groups = (self.data_shards + d_ratio - 1) / d_ratio;
+        let groups = self.data_shards.div_ceil(d_ratio);
 
         for g in 0..groups {
             let parity_count = self.parity_shards / groups.max(1);
@@ -132,8 +132,8 @@ impl RedStuffCodec {
                 // XOR all data shards in this group
                 let group_start = g * d_ratio;
                 let group_end = (group_start + d_ratio).min(self.data_shards);
-                for shard_idx in group_start..group_end {
-                    for (j, byte) in shards[shard_idx].data.iter().enumerate() {
+                for shard in &shards[group_start..group_end] {
+                    for (j, byte) in shard.data.iter().enumerate() {
                         parity[j] ^= byte;
                     }
                 }
@@ -141,8 +141,8 @@ impl RedStuffCodec {
                 // For additional parity shards, rotate and XOR again
                 if p > 0 {
                     parity.rotate_left(p * 7);
-                    for shard_idx in group_start..group_end {
-                        for (j, byte) in shards[shard_idx].data.iter().enumerate() {
+                    for shard in &shards[group_start..group_end] {
+                        for (j, byte) in shard.data.iter().enumerate() {
                             parity[j] ^= byte.rotate_left(p as u32);
                         }
                     }
@@ -193,7 +193,7 @@ impl RedStuffCodec {
         }
 
         // Recover missing shards using parity
-        let groups = (self.data_shards + d_ratio - 1) / d_ratio;
+        let groups = self.data_shards.div_ceil(d_ratio);
         for g in 0..groups {
             let group_start = g * d_ratio;
             let group_end = (group_start + d_ratio).min(self.data_shards);
@@ -207,11 +207,9 @@ impl RedStuffCodec {
                 let parity_idx = self.data_shards + g;
                 if let Some(parity) = shards.iter().find(|s| s.index == parity_idx && s.is_parity) {
                     let mut reconstructed = parity.data.clone();
-                    for idx in group_start..group_end {
-                        if let Some(ref data) = recovered_data[idx] {
-                            for (j, byte) in data.iter().enumerate() {
-                                reconstructed[j] ^= byte;
-                            }
+                    for data in recovered_data[group_start..group_end].iter().flatten() {
+                        for (j, byte) in data.iter().enumerate() {
+                            reconstructed[j] ^= byte;
                         }
                     }
                     recovered_data[missing[0]] = Some(reconstructed);
@@ -238,7 +236,7 @@ impl RedStuffCodec {
 
     fn parity_group_size(&self) -> (usize, usize) {
         let groups = if self.parity_shards > 0 {
-            (self.data_shards + self.parity_shards - 1) / self.parity_shards
+            self.data_shards.div_ceil(self.parity_shards)
         } else {
             self.data_shards
         };

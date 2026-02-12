@@ -56,10 +56,7 @@ impl HelmConfig {
 
     /// Load from file if it exists, otherwise return defaults.
     pub fn load_or_default(path: &Path) -> Self {
-        match Self::from_file(path) {
-            Ok(config) => config,
-            Err(_) => Self::default(),
-        }
+        Self::from_file(path).unwrap_or_default()
     }
 }
 
