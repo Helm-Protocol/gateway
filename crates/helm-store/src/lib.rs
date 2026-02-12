@@ -39,6 +39,7 @@
 
 pub mod kv;
 pub mod backend;
+pub mod cache;
 pub mod merkle;
 pub mod crdt;
 pub mod sync;
@@ -53,4 +54,5 @@ pub use crdt::lww::LwwRegister;
 pub use crdt::orset::OrSet;
 pub use crdt::merkle_crdt::MerkleCrdt;
 pub use sync::protocol::{SyncMessage, SyncSession};
+pub use cache::{TieredCache, TieredCacheConfig, CacheStats};
 pub use plugin::{StorePlugin, StorePluginConfig};

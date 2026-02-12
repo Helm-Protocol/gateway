@@ -18,3 +18,4 @@ futures = { workspace = true }
 async-trait = "0.1"
 sha2 = "0.10"
 sled = "0.34"
+moka = { workspace = true }

@@ -44,6 +44,9 @@ thiserror = "1"
 # Async
 futures = "0.3"
 
+# Caching
+moka = { version = "0.12", features = ["sync", "future"] }
+
 [profile.release]
 opt-level = 3
 lto = true
