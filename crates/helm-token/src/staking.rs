@@ -1,7 +1,7 @@
 //! Staking — lock tokens, earn DeFi revenue proportional to stake share.
 //!
 //! Stake types:
-//! - Founder: 1.5% genesis allocation, staked, DeFi revenue withdrawable
+//! - Founder: 1.5% genesis allocation, staked, DeFi revenue withdrawable, unlockable
 //! - Cabinet: 2.5% indefinite lock, DeFi revenue for salaries/operations
 //! - Mining:  60% pool staked for DeFi + governance-directed use
 //! - General: Any holder can stake for DeFi revenue
@@ -29,7 +29,7 @@ impl StakeType {
     /// Whether this stake type allows principal withdrawal.
     pub fn is_unlockable(&self) -> bool {
         match self {
-            Self::Founder => false,  // locked perpetually, only revenue
+            Self::Founder => true,   // unlockable — founder's last resort for emergencies
             Self::Cabinet => false,  // indefinite lockup
             Self::Mining => false,   // governance controlled
             Self::General => true,   // can unlock after lock_until
@@ -348,16 +348,15 @@ mod tests {
     }
 
     #[test]
-    fn founder_stake_cannot_unstake() {
+    fn founder_stake_unlockable() {
         let mut pool = StakePool::new();
         pool.stake(&addr("founder"), TokenAmount::from_tokens(1000), StakeType::Founder, 0)
             .unwrap();
 
-        for _ in 0..100 {
-            pool.advance_epoch();
-        }
-
-        assert!(pool.unstake(&addr("founder"), 0).is_err());
+        // Founder can unstake anytime (last resort for emergencies)
+        let returned = pool.unstake(&addr("founder"), 0).unwrap();
+        assert_eq!(returned.whole_tokens(), 1000);
+        assert_eq!(pool.total_staked(), TokenAmount::ZERO);
     }
 
     #[test]

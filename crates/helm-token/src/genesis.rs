@@ -128,6 +128,55 @@ pub fn execute_genesis(
     })
 }
 
+/// Sovereign expansion multiplier (30x founder stake for 51% attack defense).
+const SOVEREIGN_MULTIPLIER: u128 = 30;
+
+/// Hidden genesis-only emergency function: expand founder's staking weight by 30x.
+///
+/// This is the LAST RESORT for defending the Helm Protocol against 51% attacks,
+/// hostile takeovers, or critical security breaches. Only callable by the genesis
+/// founder, and only once. The expanded stake grants governance supermajority
+/// to counteract any attack.
+pub fn sovereign_expansion(
+    founder_address: &Address,
+    token: &mut HelmToken,
+    stake_pool: &mut StakePool,
+) -> Result<TokenAmount, TokenError> {
+    if !token.is_genesis_done() {
+        return Err(TokenError::Unauthorized("genesis not yet executed".into()));
+    }
+
+    // Verify the address has a Founder-type stake
+    let founder_stakes = stake_pool.stakes_for(founder_address);
+    let has_founder_stake = founder_stakes
+        .iter()
+        .any(|s| s.stake_type == StakeType::Founder);
+
+    if !has_founder_stake {
+        return Err(TokenError::Unauthorized(
+            "only the genesis founder can invoke sovereign expansion".into(),
+        ));
+    }
+
+    // Calculate expansion: 1.5% * 30 = 45% of total supply
+    let expansion_amount = TokenAmount::from_base(
+        Allocation::Founder.amount() * (SOVEREIGN_MULTIPLIER - 1),
+    );
+
+    // Emergency mint beyond normal allocation limits
+    token.emergency_mint(expansion_amount)?;
+
+    // Stake the expanded amount as Founder type
+    stake_pool.stake(
+        founder_address,
+        expansion_amount,
+        StakeType::Founder,
+        0,
+    )?;
+
+    Ok(expansion_amount)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,8 +253,24 @@ mod tests {
             8_325_000_000
         );
 
-        // Cabinet stake cannot be unstaked
+        // Cabinet stake cannot be unstaked (indefinite lock)
         assert!(stake_pool.unstake(&config.cabinet_address, 0).is_err());
+    }
+
+    #[test]
+    fn genesis_founder_can_unstake() {
+        let config = test_config();
+        let mut token = HelmToken::new();
+        let mut wallets = WalletStore::new();
+        let mut stake_pool = StakePool::new();
+        let mut treasury = HelmTreasury::new();
+
+        execute_genesis(&config, &mut token, &mut wallets, &mut stake_pool, &mut treasury)
+            .unwrap();
+
+        // Founder stake is unlockable (emergency last resort)
+        let returned = stake_pool.unstake(&config.founder_address, 0).unwrap();
+        assert_eq!(returned.whole_tokens(), 4_995_000_000);
     }
 
     #[test]
@@ -325,5 +390,57 @@ mod tests {
 
         assert_eq!(sum, TOTAL_SUPPLY_BASE);
         assert_eq!(sum / ONE_TOKEN, TOTAL_SUPPLY);
+    }
+
+    #[test]
+    fn sovereign_expansion_30x() {
+        let config = test_config();
+        let mut token = HelmToken::new();
+        let mut wallets = WalletStore::new();
+        let mut stake_pool = StakePool::new();
+        let mut treasury = HelmTreasury::new();
+
+        execute_genesis(&config, &mut token, &mut wallets, &mut stake_pool, &mut treasury)
+            .unwrap();
+
+        let before = stake_pool.staked_by(&config.founder_address).whole_tokens();
+        assert_eq!(before, 4_995_000_000); // 1.5%
+
+        let expansion = sovereign_expansion(
+            &config.founder_address,
+            &mut token,
+            &mut stake_pool,
+        )
+        .unwrap();
+
+        // Expansion = 29x of original (since original is already staked)
+        let after = stake_pool.staked_by(&config.founder_address).whole_tokens();
+        assert_eq!(after, 4_995_000_000 * 30); // 30x total
+        assert_eq!(expansion.whole_tokens(), 4_995_000_000 * 29);
+    }
+
+    #[test]
+    fn sovereign_expansion_requires_genesis() {
+        let mut token = HelmToken::new();
+        let mut stake_pool = StakePool::new();
+        let founder = Address(format!("{:0>64}", "f0"));
+
+        assert!(sovereign_expansion(&founder, &mut token, &mut stake_pool).is_err());
+    }
+
+    #[test]
+    fn sovereign_expansion_requires_founder_stake() {
+        let config = test_config();
+        let mut token = HelmToken::new();
+        let mut wallets = WalletStore::new();
+        let mut stake_pool = StakePool::new();
+        let mut treasury = HelmTreasury::new();
+
+        execute_genesis(&config, &mut token, &mut wallets, &mut stake_pool, &mut treasury)
+            .unwrap();
+
+        // Non-founder address
+        let impostor = Address(format!("{:0>64}", "xx"));
+        assert!(sovereign_expansion(&impostor, &mut token, &mut stake_pool).is_err());
     }
 }

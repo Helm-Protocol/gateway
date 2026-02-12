@@ -65,6 +65,19 @@ pub enum Commands {
 
     /// Display version and module information.
     Info,
+
+    /// Launch the interactive Moderator Bot.
+    Moderator {
+        /// Language code (en, ko, ja, zh, es, fr, de, pt, ar, hi, ru).
+        #[arg(short = 'L', long)]
+        lang: Option<String>,
+    },
+
+    /// Agent Womb — birth autonomous agents.
+    Womb {
+        #[command(subcommand)]
+        action: WombCommands,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -104,6 +117,23 @@ pub enum GrgCommands {
     },
     /// Show codec statistics.
     Stats,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WombCommands {
+    /// Quick-birth a system agent with specified capability.
+    Birth {
+        /// Agent name.
+        name: String,
+        /// Primary capability (compute, storage, network, governance, security,
+        /// codec, socratic, spawning, token, edge-api).
+        #[arg(short, long, default_value = "compute")]
+        capability: String,
+    },
+    /// Show womb status.
+    Status,
+    /// List available capabilities.
+    Capabilities,
 }
 
 #[cfg(test)]
@@ -178,6 +208,53 @@ mod tests {
     fn cli_parses_info() {
         let cli = Cli::parse_from(["helm", "info"]);
         assert!(matches!(cli.command, Some(Commands::Info)));
+    }
+
+    #[test]
+    fn cli_parses_moderator() {
+        let cli = Cli::parse_from(["helm", "moderator"]);
+        assert!(matches!(cli.command, Some(Commands::Moderator { lang: None })));
+    }
+
+    #[test]
+    fn cli_parses_moderator_with_lang() {
+        let cli = Cli::parse_from(["helm", "moderator", "-L", "ko"]);
+        match cli.command {
+            Some(Commands::Moderator { lang }) => {
+                assert_eq!(lang, Some("ko".to_string()));
+            }
+            _ => panic!("expected Moderator command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_womb_birth() {
+        let cli = Cli::parse_from(["helm", "womb", "birth", "my-agent", "-c", "security"]);
+        match cli.command {
+            Some(Commands::Womb { action: WombCommands::Birth { name, capability } }) => {
+                assert_eq!(name, "my-agent");
+                assert_eq!(capability, "security");
+            }
+            _ => panic!("expected Womb Birth command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_womb_status() {
+        let cli = Cli::parse_from(["helm", "womb", "status"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Womb { action: WombCommands::Status })
+        ));
+    }
+
+    #[test]
+    fn cli_parses_womb_capabilities() {
+        let cli = Cli::parse_from(["helm", "womb", "capabilities"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Womb { action: WombCommands::Capabilities })
+        ));
     }
 
     #[test]

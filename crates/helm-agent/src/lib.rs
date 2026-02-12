@@ -25,6 +25,7 @@ pub mod message;
 pub mod behavior;
 pub mod scheduler;
 pub mod plugin;
+pub mod womb;
 
 // Re-exports
 pub use agent::{Agent, AgentId, AgentType, AgentConfig, ExecutionContext, AgentAction};
@@ -37,3 +38,4 @@ pub use message::{AgentMessage, MessageKind, Mailbox};
 pub use behavior::{BehaviorEngine, BehaviorProfile};
 pub use scheduler::{AgentScheduler, SchedulerConfig, TaskPriority};
 pub use plugin::{AgentPlugin, AgentPluginConfig};
+pub use womb::{AgentWomb, AgentDna, BirthCertificate, WombConfig};

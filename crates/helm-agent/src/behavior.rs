@@ -311,7 +311,7 @@ mod tests {
         let id = AgentId::new("bounded-history");
 
         for tick in 0..20 {
-            engine.record(&id, &vec![tick as f32; 4], 0.1, tick);
+            engine.record(&id, &[tick as f32; 4], 0.1, tick);
         }
 
         let profile = engine.profile(&id).unwrap();

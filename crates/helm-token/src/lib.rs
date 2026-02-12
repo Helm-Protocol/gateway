@@ -54,7 +54,7 @@ pub use token::{HelmToken, TokenAmount, TokenError, Allocation, TOTAL_SUPPLY, TO
 pub use wallet::{Address, Wallet, WalletStore, Transaction};
 pub use staking::{StakePool, StakeEntry, StakeType};
 pub use treasury::{HelmTreasury, TreasuryBucket, LedgerEntry, LedgerOperation};
-pub use genesis::{GenesisConfig, GenesisResult, execute_genesis};
+pub use genesis::{GenesisConfig, GenesisResult, execute_genesis, sovereign_expansion};
 pub use cabinet::{Cabinet, Department, CabinetMember, CabinetRole, Proposal, ProposalStatus, FundingSource};
-pub use pricing::{DynamicPricing, DiscountTier};
+pub use pricing::{DynamicPricing, DiscountTier, WithdrawalFeeEngine, ContributionTier};
 pub use plugin::{TokenPlugin, TokenPluginConfig, TokenRequest};

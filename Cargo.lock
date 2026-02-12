@@ -1078,6 +1078,7 @@ dependencies = [
  "helm-engine",
  "helm-net",
  "helm-store",
+ "helm-token",
  "serde_json",
  "tokio",
  "tracing",

@@ -375,7 +375,8 @@ mod tests {
         });
 
         // Session should exist
-        assert!(plugin.active_sessions() > 0 || true); // May complete immediately if roots match
+        // Session may complete immediately if roots match, so count may be 0
+        let _ = plugin.active_sessions();
 
         // Tick should clean up completed sessions
         plugin.on_tick(&ctx).await.unwrap();

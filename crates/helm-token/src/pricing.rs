@@ -228,6 +228,128 @@ impl Default for DynamicPricing {
     }
 }
 
+/// Contribution tier — determines withdrawal fee discount.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ContributionTier {
+    /// New user, minimal contribution: 15% withdrawal fee.
+    Newcomer,
+    /// Active participant: 10% withdrawal fee.
+    Active,
+    /// Significant contributor: 5% withdrawal fee.
+    Contributor,
+    /// Core contributor: 2% withdrawal fee.
+    Core,
+    /// Veteran/essential: 1% withdrawal fee.
+    Veteran,
+}
+
+impl ContributionTier {
+    /// Withdrawal fee in basis points.
+    pub fn withdrawal_fee_bp(&self) -> u32 {
+        match self {
+            Self::Newcomer => 1500,    // 15%
+            Self::Active => 1000,      // 10%
+            Self::Contributor => 500,  //  5%
+            Self::Core => 200,         //  2%
+            Self::Veteran => 100,      //  1%
+        }
+    }
+
+    /// Determine tier from a contribution score (0-1000).
+    pub fn from_score(score: u64) -> Self {
+        if score >= 800 {
+            Self::Veteran
+        } else if score >= 500 {
+            Self::Core
+        } else if score >= 200 {
+            Self::Contributor
+        } else if score >= 50 {
+            Self::Active
+        } else {
+            Self::Newcomer
+        }
+    }
+}
+
+/// Withdrawal fee engine — free deposits, 1-15% dynamic withdrawal fee.
+///
+/// Deposits into the Helm network (IAO, DeFi, Applications) are always FREE.
+/// Withdrawals incur a fee based on the user's network contribution score,
+/// structurally incentivizing long-term participation and contribution.
+#[derive(Debug)]
+pub struct WithdrawalFeeEngine {
+    /// Contribution scores per address.
+    contribution_scores: HashMap<Address, u64>,
+    /// Total fees collected.
+    total_fees_collected: TokenAmount,
+}
+
+impl WithdrawalFeeEngine {
+    pub fn new() -> Self {
+        Self {
+            contribution_scores: HashMap::new(),
+            total_fees_collected: TokenAmount::ZERO,
+        }
+    }
+
+    /// Record a contribution event for an address.
+    pub fn add_contribution(&mut self, address: &Address, points: u64) {
+        let score = self.contribution_scores.entry(address.clone()).or_insert(0);
+        *score = (*score + points).min(1000);
+    }
+
+    /// Get contribution score for an address.
+    pub fn contribution_score(&self, address: &Address) -> u64 {
+        *self.contribution_scores.get(address).unwrap_or(&0)
+    }
+
+    /// Get contribution tier for an address.
+    pub fn contribution_tier(&self, address: &Address) -> ContributionTier {
+        ContributionTier::from_score(self.contribution_score(address))
+    }
+
+    /// Calculate withdrawal fee for a given amount.
+    /// Returns (fee_amount, net_amount_after_fee).
+    pub fn calculate_fee(
+        &self,
+        address: &Address,
+        amount: TokenAmount,
+    ) -> (TokenAmount, TokenAmount) {
+        let tier = self.contribution_tier(address);
+        let fee_bp = tier.withdrawal_fee_bp();
+        let fee = TokenAmount::from_base(
+            amount.base_units() * fee_bp as u128 / 10_000,
+        );
+        let net = TokenAmount::from_base(amount.base_units() - fee.base_units());
+        (fee, net)
+    }
+
+    /// Process a withdrawal, collecting the fee.
+    /// Returns (fee_amount, net_amount).
+    pub fn process_withdrawal(
+        &mut self,
+        address: &Address,
+        amount: TokenAmount,
+    ) -> Result<(TokenAmount, TokenAmount), TokenError> {
+        if amount.is_zero() {
+            return Err(TokenError::InvalidAmount("zero withdrawal".into()));
+        }
+        let (fee, net) = self.calculate_fee(address, amount);
+        self.total_fees_collected = self.total_fees_collected.checked_add(fee)?;
+        Ok((fee, net))
+    }
+
+    pub fn total_fees_collected(&self) -> TokenAmount {
+        self.total_fees_collected
+    }
+}
+
+impl Default for WithdrawalFeeEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,5 +494,65 @@ mod tests {
 
         assert_eq!(pricing.total_calls(&caller), 2);
         assert_eq!(pricing.calls_this_epoch(&caller), 1);
+    }
+
+    // --- Withdrawal Fee Tests ---
+
+    #[test]
+    fn newcomer_15_percent_fee() {
+        let engine = WithdrawalFeeEngine::new();
+        let (fee, net) = engine.calculate_fee(&addr("aa"), TokenAmount::from_tokens(1000));
+        assert_eq!(fee.whole_tokens(), 150);  // 15%
+        assert_eq!(net.whole_tokens(), 850);
+    }
+
+    #[test]
+    fn veteran_1_percent_fee() {
+        let mut engine = WithdrawalFeeEngine::new();
+        let user = addr("aa");
+        engine.add_contribution(&user, 900); // Veteran tier
+
+        let (fee, net) = engine.calculate_fee(&user, TokenAmount::from_tokens(1000));
+        assert_eq!(fee.whole_tokens(), 10);   // 1%
+        assert_eq!(net.whole_tokens(), 990);
+    }
+
+    #[test]
+    fn contribution_tiers_progressive() {
+        assert_eq!(ContributionTier::from_score(0), ContributionTier::Newcomer);
+        assert_eq!(ContributionTier::from_score(50), ContributionTier::Active);
+        assert_eq!(ContributionTier::from_score(200), ContributionTier::Contributor);
+        assert_eq!(ContributionTier::from_score(500), ContributionTier::Core);
+        assert_eq!(ContributionTier::from_score(800), ContributionTier::Veteran);
+    }
+
+    #[test]
+    fn contribution_score_capped_at_1000() {
+        let mut engine = WithdrawalFeeEngine::new();
+        let user = addr("aa");
+        engine.add_contribution(&user, 999);
+        engine.add_contribution(&user, 999);
+        assert_eq!(engine.contribution_score(&user), 1000);
+    }
+
+    #[test]
+    fn withdrawal_fee_collected() {
+        let mut engine = WithdrawalFeeEngine::new();
+        let user = addr("aa");
+
+        let (fee, _) = engine
+            .process_withdrawal(&user, TokenAmount::from_tokens(1000))
+            .unwrap();
+
+        assert_eq!(fee.whole_tokens(), 150);
+        assert_eq!(engine.total_fees_collected().whole_tokens(), 150);
+    }
+
+    #[test]
+    fn zero_withdrawal_fails() {
+        let mut engine = WithdrawalFeeEngine::new();
+        assert!(engine
+            .process_withdrawal(&addr("aa"), TokenAmount::ZERO)
+            .is_err());
     }
 }
