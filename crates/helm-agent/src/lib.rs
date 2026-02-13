@@ -26,6 +26,7 @@ pub mod behavior;
 pub mod scheduler;
 pub mod plugin;
 pub mod womb;
+pub mod mining;
 
 // Re-exports
 pub use agent::{Agent, AgentId, AgentType, AgentConfig, ExecutionContext, AgentAction};
@@ -39,3 +40,4 @@ pub use behavior::{BehaviorEngine, BehaviorProfile};
 pub use scheduler::{AgentScheduler, SchedulerConfig, TaskPriority};
 pub use plugin::{AgentPlugin, AgentPluginConfig};
 pub use womb::{AgentWomb, AgentDna, BirthCertificate, WombConfig};
+pub use mining::{MiningPool, MiningCategory, MiningReward, Contribution, AgentContributions};
