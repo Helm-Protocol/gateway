@@ -48,6 +48,7 @@ pub mod genesis;
 pub mod cabinet;
 pub mod pricing;
 pub mod plugin;
+pub mod x402;
 
 // Re-exports
 pub use token::{HelmToken, TokenAmount, TokenError, Allocation, TOTAL_SUPPLY, TOTAL_SUPPLY_BASE, DECIMALS, ONE_TOKEN};
@@ -58,3 +59,4 @@ pub use genesis::{GenesisConfig, GenesisResult, execute_genesis, sovereign_expan
 pub use cabinet::{Cabinet, Department, CabinetMember, CabinetRole, Proposal, ProposalStatus, FundingSource};
 pub use pricing::{DynamicPricing, DiscountTier, WithdrawalFeeEngine, ContributionTier};
 pub use plugin::{TokenPlugin, TokenPluginConfig, TokenRequest};
+pub use x402::{PaymentProtocol, EscrowContract, EscrowState, EscrowId, X402Error, QualityReport};
