@@ -11,6 +11,7 @@ use helm_token::{
     TOTAL_SUPPLY, ONE_TOKEN,
 };
 use helm_store::{StorePlugin, StorePluginConfig, KvStore};
+use helm_identity::{IdentityPlugin, IdentityPluginConfig};
 
 // ---------------------------------------------------------------------------
 // Transport & Protocol basics (from Phase 1-2)
@@ -501,4 +502,147 @@ async fn e2e_custom_event_routing() {
     for event in &events {
         store.on_event(&mut ctx, event).await.unwrap();
     }
+}
+
+// ---------------------------------------------------------------------------
+// E2E: Identity Plugin — AgentBorn → auto-register DID + Bond
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn e2e_identity_auto_register_on_agent_born() {
+    let mut ctx = PluginContext::new("test-node".to_string());
+
+    let mut identity = IdentityPlugin::new(IdentityPluginConfig::default());
+    identity.on_start(&mut ctx).await.unwrap();
+
+    // Simulate AgentBorn event (from AgentPlugin)
+    let born = PluginEvent::AgentBorn {
+        agent_id: "agent-1".to_string(),
+        capability: "compute".to_string(),
+    };
+    identity.on_event(&mut ctx, &born).await.unwrap();
+
+    // Identity should have registered this agent
+    assert_eq!(identity.spanner().active_count(), 1);
+
+    let entry = identity.spanner().resolve_by_agent("agent-1").unwrap();
+    assert!(entry.has_capability("compute"));
+    assert!(entry.document.is_active());
+    assert!(entry.bond.is_active());
+
+    // Should have emitted identity_registered confirmation
+    let events = ctx.drain_events();
+    assert!(!events.is_empty());
+}
+
+#[tokio::test]
+async fn e2e_identity_verify_via_event_bus() {
+    let mut ctx = PluginContext::new("test-node".to_string());
+
+    let mut identity = IdentityPlugin::new(IdentityPluginConfig::default());
+    identity.on_start(&mut ctx).await.unwrap();
+
+    // Register agent
+    let born = PluginEvent::AgentBorn {
+        agent_id: "agent-1".to_string(),
+        capability: "compute".to_string(),
+    };
+    identity.on_event(&mut ctx, &born).await.unwrap();
+    let did = identity.spanner().resolve_by_agent("agent-1").unwrap().did.clone();
+    ctx.drain_events();
+
+    // Send verify request via event bus
+    let verify = PluginEvent::Custom {
+        source_plugin: "helm-agent".to_string(),
+        target_plugin: "helm-identity".to_string(),
+        event_type: "verify_identity".to_string(),
+        payload: serde_json::json!({
+            "did": did,
+            "capability": "compute",
+            "request_id": "req-1",
+            "reply_to": "helm-agent",
+        }),
+    };
+    identity.on_event(&mut ctx, &verify).await.unwrap();
+
+    let events = ctx.drain_events();
+    assert_eq!(events.len(), 1);
+    if let PluginEvent::Custom { payload, .. } = &events[0] {
+        assert_eq!(payload["verified"], true);
+        assert_eq!(payload["request_id"], "req-1");
+    } else {
+        panic!("expected Custom event");
+    }
+}
+
+#[tokio::test]
+async fn e2e_all_four_plugins_lifecycle() {
+    let mut ctx = PluginContext::new("genesis-node".to_string());
+
+    let mut store = StorePlugin::new(StorePluginConfig::default());
+    let mut agent = AgentPlugin::new(AgentPluginConfig::default());
+    let mut token = TokenPlugin::new(TokenPluginConfig {
+        is_genesis: true,
+        genesis_config: Some(genesis_addresses()),
+        ticks_per_epoch: 100,
+        base_api_price: 1,
+    });
+    let mut identity = IdentityPlugin::new(IdentityPluginConfig::default());
+
+    // Start all 4 plugins
+    store.on_start(&mut ctx).await.unwrap();
+    agent.on_start(&mut ctx).await.unwrap();
+    token.on_start(&mut ctx).await.unwrap();
+    identity.on_start(&mut ctx).await.unwrap();
+
+    // Run ticks
+    for _ in 0..5 {
+        store.on_tick(&mut ctx).await.unwrap();
+        agent.on_tick(&mut ctx).await.unwrap();
+        token.on_tick(&mut ctx).await.unwrap();
+        identity.on_tick(&mut ctx).await.unwrap();
+    }
+
+    // AgentBorn → routes to Identity
+    let born = PluginEvent::AgentBorn {
+        agent_id: "born-agent".to_string(),
+        capability: "security".to_string(),
+    };
+    identity.on_event(&mut ctx, &born).await.unwrap();
+    assert_eq!(identity.spanner().active_count(), 1);
+
+    // Graceful shutdown
+    store.on_shutdown(&mut ctx).await.unwrap();
+    agent.on_shutdown(&mut ctx).await.unwrap();
+    token.on_shutdown(&mut ctx).await.unwrap();
+    identity.on_shutdown(&mut ctx).await.unwrap();
+}
+
+#[tokio::test]
+async fn e2e_identity_terminate_via_event_bus() {
+    let mut ctx = PluginContext::new("test-node".to_string());
+
+    let mut identity = IdentityPlugin::new(IdentityPluginConfig::default());
+    identity.on_start(&mut ctx).await.unwrap();
+
+    let born = PluginEvent::AgentBorn {
+        agent_id: "agent-1".to_string(),
+        capability: "compute".to_string(),
+    };
+    identity.on_event(&mut ctx, &born).await.unwrap();
+    let did = identity.spanner().resolve_by_agent("agent-1").unwrap().did.clone();
+    ctx.drain_events();
+
+    assert_eq!(identity.spanner().active_count(), 1);
+
+    // Terminate via event bus
+    let terminate = PluginEvent::Custom {
+        source_plugin: "helm-agent".to_string(),
+        target_plugin: "helm-identity".to_string(),
+        event_type: "terminate".to_string(),
+        payload: serde_json::json!({ "did": did }),
+    };
+    identity.on_event(&mut ctx, &terminate).await.unwrap();
+
+    assert_eq!(identity.spanner().active_count(), 0);
 }

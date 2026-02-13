@@ -83,6 +83,7 @@ async fn cmd_run(
     banner::print_module_status("helm-store", "KV store + CRDT + Merkle DAG", true);
     banner::print_module_status("helm-agent", "Agent framework + Socratic Claw + Womb", true);
     banner::print_module_status("helm-token", "Token economics + Treasury + Staking", true);
+    banner::print_module_status("helm-identity", "DID-first identity + Agent Spanner", true);
     println!();
 
     tracing::info!("Helm Protocol v{}", env!("CARGO_PKG_VERSION"));
@@ -106,10 +107,16 @@ async fn cmd_run(
         helm_token::TokenPlugin::new(helm_token::TokenPluginConfig::default()),
     ));
 
+    // Identity plugin (DID, Identity Bonds, Agent Spanner, Reputation)
+    runtime.register_plugin(Box::new(
+        helm_identity::IdentityPlugin::new(helm_identity::IdentityPluginConfig::default()),
+    ));
+
     banner::print_section("Plugins");
     banner::print_module_status("helm-store", "KV + sync", true);
     banner::print_module_status("helm-agent", "agents + Socratic Claw", true);
     banner::print_module_status("helm-token", "token economics", true);
+    banner::print_module_status("helm-identity", "DID + Identity Bonds + Reputation", true);
     println!();
 
     runtime.run().await
@@ -353,6 +360,7 @@ fn cmd_info() -> Result<()> {
     banner::print_module_status("helm-store", "KV store + CRDT + Merkle DAG + Sync", true);
     banner::print_module_status("helm-agent", "Agent framework + Socratic Claw + Womb", true);
     banner::print_module_status("helm-token", "Token economics + Staking + Treasury", true);
+    banner::print_module_status("helm-identity", "DID + Identity Bonds + Agent Spanner + Reputation", true);
     banner::print_module_status("helm-node", "CLI + Moderator Bot + binary entry", true);
 
     banner::print_section("Architecture");

@@ -16,6 +16,7 @@ helm-engine = { path = "../helm-engine" }
 helm-store = { path = "../helm-store" }
 helm-agent = { path = "../helm-agent" }
 helm-token = { path = "../helm-token" }
+helm-identity = { path = "../helm-identity" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
