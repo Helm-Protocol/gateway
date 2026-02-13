@@ -5,5 +5,5 @@ pub mod runtime;
 
 pub use config::HelmConfig;
 pub use event_loop::EventLoop;
-pub use plugin::{Plugin, PluginContext};
+pub use plugin::{Plugin, PluginContext, PluginEvent};
 pub use runtime::Runtime;

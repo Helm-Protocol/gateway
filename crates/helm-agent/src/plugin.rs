@@ -8,7 +8,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use helm_core::{Plugin, PluginContext};
+use helm_core::{Plugin, PluginContext, PluginEvent};
 use helm_net::protocol::HelmMessage;
 
 use crate::agent::{AgentId, AgentAction};
@@ -137,7 +137,7 @@ impl AgentPlugin {
     }
 
     /// Process a single agent action.
-    fn process_action(&mut self, from: &AgentId, action: AgentAction) {
+    pub fn process_action(&mut self, from: &AgentId, action: AgentAction, ctx: &mut PluginContext) {
         match action {
             AgentAction::Noop => {}
             AgentAction::Send { target, payload } => {
@@ -167,13 +167,23 @@ impl AgentPlugin {
             }
             AgentAction::Batch(actions) => {
                 for a in actions {
-                    self.process_action(from, a);
+                    self.process_action(from, a, ctx);
                 }
             }
-            AgentAction::Store { .. } | AgentAction::RequestCapability { .. } => {
-                // These need cross-plugin coordination (store plugin, etc.)
-                // Logged for now, will be routed in Phase 4 integration
-                tracing::debug!(agent = %from, "Action requires cross-plugin routing");
+            AgentAction::Store { key, value } => {
+                ctx.emit(PluginEvent::StoreRequest {
+                    key,
+                    value,
+                    source: from.as_str().to_string(),
+                });
+            }
+            AgentAction::RequestCapability { capability, .. } => {
+                ctx.emit(PluginEvent::Custom {
+                    source_plugin: "helm-agent".to_string(),
+                    target_plugin: "helm-core".to_string(),
+                    event_type: "capability_request".to_string(),
+                    payload: serde_json::json!({ "agent": from.as_str(), "capability": capability }),
+                });
             }
         }
         self.actions_processed += 1;
@@ -196,7 +206,7 @@ impl Plugin for AgentPlugin {
         "helm-agent"
     }
 
-    async fn on_start(&mut self, ctx: &PluginContext) -> Result<()> {
+    async fn on_start(&mut self, ctx: &mut PluginContext) -> Result<()> {
         tracing::info!(
             node = %ctx.node_name,
             max_agents = self.config.max_agents,
@@ -206,7 +216,7 @@ impl Plugin for AgentPlugin {
         Ok(())
     }
 
-    async fn on_message(&mut self, _ctx: &PluginContext, msg: &HelmMessage) -> Result<()> {
+    async fn on_message(&mut self, _ctx: &mut PluginContext, msg: &HelmMessage) -> Result<()> {
         // Route incoming network messages to appropriate agents
         if let Some(target) = msg.payload.get("agent_target") {
             if let Some(target_str) = target.as_str() {
@@ -235,7 +245,7 @@ impl Plugin for AgentPlugin {
         Ok(())
     }
 
-    async fn on_tick(&mut self, ctx: &PluginContext) -> Result<()> {
+    async fn on_tick(&mut self, ctx: &mut PluginContext) -> Result<()> {
         self.tick_count += 1;
 
         // Get all running agents
@@ -296,13 +306,13 @@ impl Plugin for AgentPlugin {
 
         // Process actions after all ticks (avoids borrow conflicts)
         for (agent_id, action) in actions_to_process {
-            self.process_action(&agent_id, action);
+            self.process_action(&agent_id, action, ctx);
         }
 
         Ok(())
     }
 
-    async fn on_shutdown(&mut self, _ctx: &PluginContext) -> Result<()> {
+    async fn on_shutdown(&mut self, _ctx: &mut PluginContext) -> Result<()> {
         let agents = self.registry.agent_ids();
         for id in &agents {
             if let Some(agent) = self.registry.get(id) {
@@ -401,36 +411,30 @@ mod tests {
     #[tokio::test]
     async fn plugin_on_start() {
         let mut plugin = AgentPlugin::new(AgentPluginConfig::default());
-        let ctx = PluginContext {
-            node_name: "test-node".to_string(),
-        };
-        plugin.on_start(&ctx).await.unwrap();
+        let mut ctx = PluginContext::new("test-node".to_string());
+        plugin.on_start(&mut ctx).await.unwrap();
     }
 
     #[tokio::test]
     async fn plugin_on_tick_with_agents() {
         let mut plugin = AgentPlugin::new(AgentPluginConfig::default());
-        let ctx = PluginContext {
-            node_name: "test-node".to_string(),
-        };
+        let mut ctx = PluginContext::new("test-node".to_string());
 
         plugin.add_agent(Box::new(PluginTestAgent::new("a1")), TaskPriority::Normal).unwrap();
         plugin.add_agent(Box::new(PluginTestAgent::new("a2")), TaskPriority::High).unwrap();
 
         // Run a tick
-        plugin.on_tick(&ctx).await.unwrap();
+        plugin.on_tick(&mut ctx).await.unwrap();
         assert_eq!(plugin.tick_count(), 1);
     }
 
     #[tokio::test]
     async fn plugin_on_shutdown() {
         let mut plugin = AgentPlugin::new(AgentPluginConfig::default());
-        let ctx = PluginContext {
-            node_name: "test-node".to_string(),
-        };
+        let mut ctx = PluginContext::new("test-node".to_string());
 
         plugin.add_agent(Box::new(PluginTestAgent::new("a1")), TaskPriority::Normal).unwrap();
-        plugin.on_shutdown(&ctx).await.unwrap();
+        plugin.on_shutdown(&mut ctx).await.unwrap();
 
         // All agents should be terminated
         let id = AgentId::new("a1");
@@ -443,11 +447,12 @@ mod tests {
         plugin.add_agent(Box::new(PluginTestAgent::new("sender")), TaskPriority::Normal).unwrap();
         plugin.add_agent(Box::new(PluginTestAgent::new("receiver")), TaskPriority::Normal).unwrap();
 
+        let mut ctx = PluginContext::new("test-node".to_string());
         let from = AgentId::new("sender");
         plugin.process_action(&from, AgentAction::Send {
             target: AgentId::new("receiver"),
             payload: "hello".to_string(),
-        });
+        }, &mut ctx);
         assert_eq!(plugin.actions_processed(), 1);
     }
 
@@ -456,11 +461,12 @@ mod tests {
         let mut plugin = AgentPlugin::new(AgentPluginConfig::default());
         plugin.add_agent(Box::new(PluginTestAgent::new("batcher")), TaskPriority::Normal).unwrap();
 
+        let mut ctx = PluginContext::new("test-node".to_string());
         let from = AgentId::new("batcher");
         plugin.process_action(&from, AgentAction::Batch(vec![
             AgentAction::Noop,
             AgentAction::Noop,
-        ]));
+        ]), &mut ctx);
         // Batch counts as 1 + 2 inner actions
         assert_eq!(plugin.actions_processed(), 3);
     }

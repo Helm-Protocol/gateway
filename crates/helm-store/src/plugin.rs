@@ -10,7 +10,7 @@ use anyhow::Result;
 use tracing::{info, warn, debug};
 use async_trait::async_trait;
 
-use helm_core::plugin::{Plugin, PluginContext};
+use helm_core::plugin::{Plugin, PluginContext, PluginEvent};
 use helm_net::protocol::HelmMessage;
 
 use crate::backend::memory::MemoryBackend;
@@ -184,14 +184,14 @@ impl Plugin for StorePlugin {
         "helm-store"
     }
 
-    async fn on_start(&mut self, ctx: &PluginContext) -> Result<()> {
+    async fn on_start(&mut self, ctx: &mut PluginContext) -> Result<()> {
         info!("StorePlugin: started on node '{}'", ctx.node_name);
         Ok(())
     }
 
     async fn on_message(
         &mut self,
-        _ctx: &PluginContext,
+        _ctx: &mut PluginContext,
         msg: &HelmMessage,
     ) -> Result<()> {
         self.messages_processed += 1;
@@ -212,7 +212,7 @@ impl Plugin for StorePlugin {
         Ok(())
     }
 
-    async fn on_tick(&mut self, _ctx: &PluginContext) -> Result<()> {
+    async fn on_tick(&mut self, _ctx: &mut PluginContext) -> Result<()> {
         self.tick_count += 1;
 
         // Periodic sync check
@@ -230,7 +230,31 @@ impl Plugin for StorePlugin {
         Ok(())
     }
 
-    async fn on_shutdown(&mut self, _ctx: &PluginContext) -> Result<()> {
+    async fn on_event(&mut self, ctx: &mut PluginContext, event: &PluginEvent) -> Result<()> {
+        if let PluginEvent::StoreRequest { key, value, source } = event {
+            match self.store.put(key, value) {
+                Ok(()) => {
+                    debug!(source = %source, key_len = key.len(), "Store request fulfilled");
+                    ctx.emit(PluginEvent::StoreResponse {
+                        key: key.clone(),
+                        value: Some(value.clone()),
+                        target: source.clone(),
+                    });
+                }
+                Err(e) => {
+                    warn!(source = %source, error = %e, "Store request failed");
+                    ctx.emit(PluginEvent::StoreResponse {
+                        key: key.clone(),
+                        value: None,
+                        target: source.clone(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn on_shutdown(&mut self, _ctx: &mut PluginContext) -> Result<()> {
         info!("StorePlugin: shutting down, flushing store");
         self.store.flush()?;
         Ok(())
@@ -242,30 +266,28 @@ mod tests {
     use super::*;
 
     fn make_ctx() -> PluginContext {
-        PluginContext {
-            node_name: "test-node".to_string(),
-        }
+        PluginContext::new("test-node".to_string())
     }
 
     #[tokio::test]
     async fn plugin_lifecycle() {
         let mut plugin = StorePlugin::new(StorePluginConfig::default());
-        let ctx = make_ctx();
+        let mut ctx = make_ctx();
 
-        plugin.on_start(&ctx).await.unwrap();
+        plugin.on_start(&mut ctx).await.unwrap();
         assert_eq!(plugin.name(), "helm-store");
 
-        plugin.on_tick(&ctx).await.unwrap();
+        plugin.on_tick(&mut ctx).await.unwrap();
         assert_eq!(plugin.tick_count(), 1);
 
-        plugin.on_shutdown(&ctx).await.unwrap();
+        plugin.on_shutdown(&mut ctx).await.unwrap();
     }
 
     #[tokio::test]
     async fn plugin_processes_messages() {
         let mut plugin = StorePlugin::new(StorePluginConfig::default());
-        let ctx = make_ctx();
-        plugin.on_start(&ctx).await.unwrap();
+        let mut ctx = make_ctx();
+        plugin.on_start(&mut ctx).await.unwrap();
 
         let msg = HelmMessage {
             version: 1,
@@ -274,15 +296,15 @@ mod tests {
             timestamp: 1000,
         };
 
-        plugin.on_message(&ctx, &msg).await.unwrap();
+        plugin.on_message(&mut ctx, &msg).await.unwrap();
         assert_eq!(plugin.messages_processed(), 1);
     }
 
     #[tokio::test]
     async fn plugin_handles_sync_offer() {
         let mut plugin = StorePlugin::new(StorePluginConfig::default());
-        let ctx = make_ctx();
-        plugin.on_start(&ctx).await.unwrap();
+        let mut ctx = make_ctx();
+        plugin.on_start(&mut ctx).await.unwrap();
 
         // Simulate receiving a sync offer via message
         let sync_offer = SyncMessage::SyncOffer {
@@ -301,7 +323,7 @@ mod tests {
             timestamp: 1000,
         };
 
-        plugin.on_message(&ctx, &msg).await.unwrap();
+        plugin.on_message(&mut ctx, &msg).await.unwrap();
         assert_eq!(plugin.messages_processed(), 1);
     }
 
@@ -312,10 +334,10 @@ mod tests {
             max_sync_batch: 50,
         };
         let mut plugin = StorePlugin::new(config);
-        let ctx = make_ctx();
+        let mut ctx = make_ctx();
 
         for _ in 0..10 {
-            plugin.on_tick(&ctx).await.unwrap();
+            plugin.on_tick(&mut ctx).await.unwrap();
         }
         assert_eq!(plugin.tick_count(), 10);
     }
@@ -365,7 +387,7 @@ mod tests {
     #[tokio::test]
     async fn plugin_session_cleanup() {
         let mut plugin = StorePlugin::new(StorePluginConfig::default());
-        let ctx = make_ctx();
+        let mut ctx = make_ctx();
 
         // Create a sync session by handling a different-root offer
         let hash = [1u8; 32];
@@ -379,6 +401,6 @@ mod tests {
         let _ = plugin.active_sessions();
 
         // Tick should clean up completed sessions
-        plugin.on_tick(&ctx).await.unwrap();
+        plugin.on_tick(&mut ctx).await.unwrap();
     }
 }

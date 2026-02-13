@@ -10,7 +10,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use helm_core::{Plugin, PluginContext};
+use helm_core::{Plugin, PluginContext, PluginEvent};
 use helm_net::protocol::HelmMessage;
 
 use crate::cabinet::Cabinet;
@@ -187,7 +187,7 @@ impl TokenPlugin {
     }
 
     /// Handle a token request from a network message.
-    fn handle_request(&mut self, request: TokenRequest) -> Result<()> {
+    pub fn handle_request(&mut self, request: TokenRequest) -> Result<()> {
         match request {
             TokenRequest::Transfer {
                 from,
@@ -249,13 +249,13 @@ impl Plugin for TokenPlugin {
         "helm-token"
     }
 
-    async fn on_start(&mut self, ctx: &PluginContext) -> Result<()> {
+    async fn on_start(&mut self, ctx: &mut PluginContext) -> Result<()> {
         info!(node = %ctx.node_name, "TokenPlugin starting");
         self.run_genesis()?;
         Ok(())
     }
 
-    async fn on_message(&mut self, _ctx: &PluginContext, msg: &HelmMessage) -> Result<()> {
+    async fn on_message(&mut self, _ctx: &mut PluginContext, msg: &HelmMessage) -> Result<()> {
         // Try to parse token requests from TaskRequest messages
         if msg.kind == helm_net::protocol::MessageKind::TaskRequest {
             if let Some(kind_str) = msg.payload.get("kind").and_then(|v| v.as_str()) {
@@ -278,7 +278,7 @@ impl Plugin for TokenPlugin {
         Ok(())
     }
 
-    async fn on_tick(&mut self, _ctx: &PluginContext) -> Result<()> {
+    async fn on_tick(&mut self, _ctx: &mut PluginContext) -> Result<()> {
         self.tick_count += 1;
 
         if self.tick_count.is_multiple_of(self.config.ticks_per_epoch) {
@@ -290,7 +290,22 @@ impl Plugin for TokenPlugin {
         Ok(())
     }
 
-    async fn on_shutdown(&mut self, _ctx: &PluginContext) -> Result<()> {
+    async fn on_event(&mut self, _ctx: &mut PluginContext, event: &PluginEvent) -> Result<()> {
+        if let PluginEvent::ApiRevenue { caller, amount_units, endpoint } = event {
+            let amt = crate::token::TokenAmount::from_base(*amount_units as u128);
+            if let Err(e) = self.pricing.process_call(
+                &Address(caller.clone()),
+                amt,
+            ) {
+                warn!(error = %e, "API revenue processing failed");
+            } else {
+                debug!(caller = %caller, amount = amount_units, endpoint = %endpoint, "API revenue recorded");
+            }
+        }
+        Ok(())
+    }
+
+    async fn on_shutdown(&mut self, _ctx: &mut PluginContext) -> Result<()> {
         info!(
             minted = %self.token.minted(),
             wallets = self.wallets.wallet_count(),
@@ -327,11 +342,9 @@ mod tests {
     #[tokio::test]
     async fn plugin_genesis_on_start() {
         let mut plugin = genesis_plugin();
-        let ctx = PluginContext {
-            node_name: "genesis-node".to_string(),
-        };
+        let mut ctx = PluginContext::new("genesis-node".to_string());
 
-        plugin.on_start(&ctx).await.unwrap();
+        plugin.on_start(&mut ctx).await.unwrap();
 
         assert!(plugin.token.is_genesis_done());
         assert_eq!(plugin.token.minted().whole_tokens(), TOTAL_SUPPLY);
@@ -340,11 +353,9 @@ mod tests {
     #[tokio::test]
     async fn plugin_non_genesis_skips() {
         let mut plugin = TokenPlugin::new(TokenPluginConfig::default());
-        let ctx = PluginContext {
-            node_name: "regular-node".to_string(),
-        };
+        let mut ctx = PluginContext::new("regular-node".to_string());
 
-        plugin.on_start(&ctx).await.unwrap();
+        plugin.on_start(&mut ctx).await.unwrap();
         assert!(!plugin.token.is_genesis_done());
     }
 
@@ -424,11 +435,9 @@ mod tests {
     #[tokio::test]
     async fn plugin_epoch_processing() {
         let mut plugin = genesis_plugin();
-        let ctx = PluginContext {
-            node_name: "genesis-node".to_string(),
-        };
+        let mut ctx = PluginContext::new("genesis-node".to_string());
 
-        plugin.on_start(&ctx).await.unwrap();
+        plugin.on_start(&mut ctx).await.unwrap();
 
         // Simulate API revenue
         let caller = Address(format!("{:0>64}", "c1"));
@@ -439,7 +448,7 @@ mod tests {
 
         // Run ticks until epoch
         for _ in 0..10 {
-            plugin.on_tick(&ctx).await.unwrap();
+            plugin.on_tick(&mut ctx).await.unwrap();
         }
 
         // Epoch should have been processed
@@ -449,12 +458,10 @@ mod tests {
     #[tokio::test]
     async fn plugin_shutdown() {
         let mut plugin = genesis_plugin();
-        let ctx = PluginContext {
-            node_name: "genesis-node".to_string(),
-        };
+        let mut ctx = PluginContext::new("genesis-node".to_string());
 
-        plugin.on_start(&ctx).await.unwrap();
-        plugin.on_shutdown(&ctx).await.unwrap();
+        plugin.on_start(&mut ctx).await.unwrap();
+        plugin.on_shutdown(&mut ctx).await.unwrap();
     }
 
     #[test]

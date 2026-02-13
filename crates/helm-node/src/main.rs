@@ -88,7 +88,30 @@ async fn cmd_run(
     tracing::info!("Helm Protocol v{}", env!("CARGO_PKG_VERSION"));
     tracing::info!("Every agent is a node. Every node is sovereign.");
 
-    let runtime = Runtime::new(config);
+    // Register all plugins
+    let mut runtime = Runtime::new(config);
+
+    // Store plugin (distributed KV + CRDT + Merkle sync)
+    runtime.register_plugin(Box::new(
+        helm_store::StorePlugin::new(helm_store::StorePluginConfig::default()),
+    ));
+
+    // Agent plugin (autonomous agent framework)
+    runtime.register_plugin(Box::new(
+        helm_agent::AgentPlugin::new(helm_agent::AgentPluginConfig::default()),
+    ));
+
+    // Token plugin (token economics — genesis on first run)
+    runtime.register_plugin(Box::new(
+        helm_token::TokenPlugin::new(helm_token::TokenPluginConfig::default()),
+    ));
+
+    banner::print_section("Plugins");
+    banner::print_module_status("helm-store", "KV + sync", true);
+    banner::print_module_status("helm-agent", "agents + Socratic Claw", true);
+    banner::print_module_status("helm-token", "token economics", true);
+    println!();
+
     runtime.run().await
 }
 
