@@ -1,0 +1,21 @@
+[package]
+name = "helm-identity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Decentralized Identity for the Helm Protocol — DID-first, self-sovereign agent identity"
+
+[dependencies]
+helm-core = { path = "../helm-core" }
+helm-net = { path = "../helm-net" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-trait = "0.1"
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
+rand = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
