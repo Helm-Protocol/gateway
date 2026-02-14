@@ -49,6 +49,7 @@ pub mod cabinet;
 pub mod pricing;
 pub mod plugin;
 pub mod x402;
+pub mod launchpad;
 
 // Re-exports
 pub use token::{HelmToken, TokenAmount, TokenError, Allocation, TOTAL_SUPPLY, TOTAL_SUPPLY_BASE, DECIMALS, ONE_TOKEN};
@@ -60,3 +61,4 @@ pub use cabinet::{Cabinet, Department, CabinetMember, CabinetRole, Proposal, Pro
 pub use pricing::{DynamicPricing, DiscountTier, WithdrawalFeeEngine, ContributionTier};
 pub use plugin::{TokenPlugin, TokenPluginConfig, TokenRequest};
 pub use x402::{PaymentProtocol, EscrowContract, EscrowState, EscrowId, X402Error, QualityReport};
+pub use launchpad::{Launchpad, AgentToken, AgentTokenId, LiquidityPool, LaunchpadError};
