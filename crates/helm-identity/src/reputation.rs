@@ -134,7 +134,7 @@ impl ReputationScore {
     pub fn record(&mut self, category: &str, delta: f64) {
         self.categories
             .entry(category.to_string())
-            .or_insert_with(CategoryScore::new)
+            .or_default()
             .apply(delta);
     }
 
@@ -173,7 +173,7 @@ impl ReputationLedger {
     pub fn initialize(&mut self, did: &str) {
         self.scores
             .entry(did.to_string())
-            .or_insert_with(ReputationScore::new);
+            .or_default();
     }
 
     /// Record a reputation event.

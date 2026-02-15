@@ -203,6 +203,29 @@ impl WombPlugin {
                     capability: capability.clone(),
                 });
 
+                // 1b. Emit DNA metadata → IdentityPlugin stores in bond
+                let secondary: Vec<String> = cert.dna.secondary_capabilities
+                    .iter()
+                    .map(|c| format!("{}", c))
+                    .collect();
+                ctx.emit(PluginEvent::Custom {
+                    source_plugin: PLUGIN_NAME.to_string(),
+                    target_plugin: "helm-identity".to_string(),
+                    event_type: "dna_metadata".to_string(),
+                    payload: serde_json::json!({
+                        "agent_id": agent_id,
+                        "dna": {
+                            "primary_capability": capability,
+                            "secondary_capabilities": secondary,
+                            "autonomy": cert.dna.autonomy,
+                            "creativity": cert.dna.creativity,
+                            "g_threshold": cert.dna.g_threshold,
+                        },
+                        "birth_g_metric": cert.birth_g_metric,
+                        "womb_id": cert.womb_id,
+                    }),
+                });
+
                 // 2. Emit wallet creation request → TokenPlugin creates wallet + stakes existence deposit
                 ctx.emit(PluginEvent::Custom {
                     source_plugin: PLUGIN_NAME.to_string(),
@@ -278,7 +301,7 @@ impl Plugin for WombPlugin {
 
     async fn on_tick(&mut self, _ctx: &mut PluginContext) -> Result<()> {
         self.tick_count += 1;
-        if self.tick_count % self.config.ticks_per_epoch == 0 {
+        if self.tick_count.is_multiple_of(self.config.ticks_per_epoch) {
             self.womb.advance_epoch();
         }
         Ok(())
@@ -408,8 +431,8 @@ mod tests {
 
         // Check emitted events
         let events = ctx.drain_events();
-        // Should emit: AgentBorn + womb_wallet_create + agent_spawned (no launch_token)
-        assert_eq!(events.len(), 3);
+        // Should emit: AgentBorn + dna_metadata + womb_wallet_create + agent_spawned (no launch_token)
+        assert_eq!(events.len(), 4);
 
         // First event should be AgentBorn
         match &events[0] {
@@ -420,8 +443,18 @@ mod tests {
             other => panic!("expected AgentBorn, got {:?}", other),
         }
 
-        // Second event should be womb_wallet_create
+        // Second event should be dna_metadata
         match &events[1] {
+            PluginEvent::Custom { event_type, target_plugin, payload, .. } => {
+                assert_eq!(event_type, "dna_metadata");
+                assert_eq!(target_plugin, "helm-identity");
+                assert!(payload.get("dna").is_some());
+            }
+            other => panic!("expected dna_metadata, got {:?}", other),
+        }
+
+        // Third event should be womb_wallet_create
+        match &events[2] {
             PluginEvent::Custom { event_type, payload, .. } => {
                 assert_eq!(event_type, EVENT_WOMB_WALLET_CREATE);
                 assert_eq!(payload["existence_stake"].as_u64().unwrap(), EXISTENCE_STAKE as u64);
@@ -454,11 +487,11 @@ mod tests {
         plugin.on_event(&mut ctx, &spawn).await.unwrap();
 
         let events = ctx.drain_events();
-        // Should emit: AgentBorn + womb_wallet_create + womb_launch_token + agent_spawned
-        assert_eq!(events.len(), 4);
+        // Should emit: AgentBorn + dna_metadata + womb_wallet_create + womb_launch_token + agent_spawned
+        assert_eq!(events.len(), 5);
 
-        // Third event should be womb_launch_token
-        match &events[2] {
+        // Fourth event should be womb_launch_token
+        match &events[3] {
             PluginEvent::Custom { event_type, payload, .. } => {
                 assert_eq!(event_type, EVENT_WOMB_LAUNCH_TOKEN);
                 assert_eq!(payload["creator"], "did:helm:xyz789");

@@ -1045,6 +1045,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "futures",
+ "helm-core",
+ "helm-net",
  "rand 0.8.5",
  "serde",
  "serde_json",

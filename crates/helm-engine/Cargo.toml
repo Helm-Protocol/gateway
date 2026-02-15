@@ -6,6 +6,8 @@ license.workspace = true
 description = "Helm Engine: QKV-G attention + GRG distributed codec pipeline"
 
 [dependencies]
+helm-core = { path = "../helm-core" }
+helm-net = { path = "../helm-net" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

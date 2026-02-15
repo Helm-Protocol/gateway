@@ -59,7 +59,7 @@ impl Plugin for GovernancePlugin {
 
     async fn on_tick(&mut self, _ctx: &mut PluginContext) -> Result<()> {
         self.tick_count += 1;
-        if self.tick_count % self.ticks_per_epoch == 0 {
+        if self.tick_count.is_multiple_of(self.ticks_per_epoch) {
             self.engine.advance_epoch(&mut self.registry);
         }
         Ok(())

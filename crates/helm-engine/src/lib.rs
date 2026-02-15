@@ -33,5 +33,6 @@ pub use qkvg::attention::{HelmAttentionEngine, AttentionOutput};
 pub use qkvg::cache_block::GapAwareCacheBlock;
 pub use api::edge::EdgeApi;
 pub use api::core_api::CoreApi;
+pub use api::core_api_plugin::CoreApiPlugin;
 pub use api::billing::BillingLedger;
 pub use shard::exchange::ShardExchange;

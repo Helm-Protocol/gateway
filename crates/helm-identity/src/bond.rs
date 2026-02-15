@@ -217,9 +217,9 @@ fn deterministic_hash(data: &[u8]) -> [u8; 32] {
         h = h.wrapping_mul(33).wrapping_add(byte as u64);
         hash[i % 32] ^= (h & 0xFF) as u8;
     }
-    for i in 0..32 {
-        h = h.wrapping_mul(33).wrapping_add(hash[i] as u64);
-        hash[i] = (h & 0xFF) as u8;
+    for byte in &mut hash {
+        h = h.wrapping_mul(33).wrapping_add(*byte as u64);
+        *byte = (h & 0xFF) as u8;
     }
     hash
 }

@@ -482,7 +482,7 @@ fn isqrt(n: u128) -> u128 {
         return 0;
     }
     let mut x = n;
-    let mut y = (x + 1) / 2;
+    let mut y = x.div_ceil(2);
     while y < x {
         x = y;
         y = (x + n / x) / 2;
@@ -497,9 +497,9 @@ fn deterministic_hash(data: &[u8]) -> [u8; 32] {
         h = h.wrapping_mul(DJB2_MULTIPLIER).wrapping_add(byte as u64);
         hash[i % 32] ^= (h & 0xFF) as u8;
     }
-    for i in 0..32 {
-        h = h.wrapping_mul(DJB2_MULTIPLIER).wrapping_add(hash[i] as u64);
-        hash[i] = (h & 0xFF) as u8;
+    for byte in &mut hash {
+        h = h.wrapping_mul(DJB2_MULTIPLIER).wrapping_add(*byte as u64);
+        *byte = (h & 0xFF) as u8;
     }
     hash
 }

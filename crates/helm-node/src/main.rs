@@ -123,6 +123,11 @@ async fn cmd_run(
         helm_agent::WombPlugin::with_defaults(),
     ));
 
+    // Core API plugin (Mother Agent brain — anomaly detection + emergency alerts)
+    runtime.register_plugin(Box::new(
+        helm_engine::CoreApiPlugin::with_defaults(),
+    ));
+
     banner::print_section("Plugins");
     banner::print_module_status("helm-store", "KV + sync", true);
     banner::print_module_status("helm-agent", "agents + Socratic Claw", true);
@@ -130,9 +135,10 @@ async fn cmd_run(
     banner::print_module_status("helm-identity", "DID + Identity Bonds + Reputation", true);
     banner::print_module_status("helm-governance", "proposals + voting", true);
     banner::print_module_status("helm-womb", "agent birth + Existence Stake", true);
+    banner::print_module_status("helm-core-api", "Mother Agent brain + anomaly detection", true);
     println!();
 
-    runtime.run().await
+    runtime.run_blocking().await
 }
 
 fn cmd_status() -> Result<()> {

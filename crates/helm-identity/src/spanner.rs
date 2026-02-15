@@ -151,6 +151,11 @@ impl AgentSpanner {
         self.cache.values().find(|e| e.agent_id == agent_id)
     }
 
+    /// Resolve by agent ID (mutable).
+    pub fn resolve_by_agent_mut(&mut self, agent_id: &str) -> Option<&mut SpannerEntry> {
+        self.cache.values_mut().find(|e| e.agent_id == agent_id)
+    }
+
     /// Update heartbeat (agent is alive).
     pub fn heartbeat(&mut self, did: &str, timestamp: u64, address: Option<String>) {
         if let Some(entry) = self.cache.get_mut(did) {

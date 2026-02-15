@@ -132,6 +132,32 @@ impl IdentityPlugin {
         Ok(())
     }
 
+    /// Handle DNA metadata from WombPlugin: store in bond metadata.
+    fn handle_dna_metadata(
+        &mut self,
+        payload: &serde_json::Value,
+    ) {
+        let agent_id = match payload.get("agent_id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => return,
+        };
+
+        if let Some(entry) = self.spanner.resolve_by_agent_mut(agent_id) {
+            if let Some(dna) = payload.get("dna") {
+                entry.bond.set_metadata("dna", &dna.to_string());
+            }
+            if let Some(g) = payload.get("birth_g_metric").and_then(|v| v.as_f64()) {
+                entry.bond.set_metadata("birth_g_metric", &format!("{:.4}", g));
+            }
+            if let Some(womb_id) = payload.get("womb_id").and_then(|v| v.as_str()) {
+                entry.bond.set_metadata("womb_id", womb_id);
+            }
+            tracing::info!(agent = %agent_id, "DNA metadata bound to identity bond");
+        } else {
+            tracing::debug!(agent = %agent_id, "DNA metadata arrived before identity registration");
+        }
+    }
+
     /// Handle identity verification request.
     fn handle_verify_request(
         &self,
@@ -188,7 +214,7 @@ impl Plugin for IdentityPlugin {
         self.current_time += 1; // Simplified: 1 tick = 1 second
 
         // Periodic reputation decay
-        if self.tick_count % self.config.decay_interval_ticks == 0 {
+        if self.tick_count.is_multiple_of(self.config.decay_interval_ticks) {
             self.spanner.apply_decay(self.config.decay_factor);
             tracing::debug!(tick = self.tick_count, "reputation decay applied");
         }
@@ -227,6 +253,9 @@ impl Plugin for IdentityPlugin {
                         if let Some(did) = payload.get("did").and_then(|v| v.as_str()) {
                             let _ = self.spanner.terminate_agent(did, self.current_time);
                         }
+                    }
+                    "dna_metadata" => {
+                        self.handle_dna_metadata(payload);
                     }
                     _ => {}
                 }

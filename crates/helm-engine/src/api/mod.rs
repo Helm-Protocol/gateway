@@ -11,4 +11,5 @@
 
 pub mod edge;
 pub mod core_api;
+pub mod core_api_plugin;
 pub mod billing;

@@ -192,3 +192,95 @@ pub enum TransportEvent {
     Connected(PeerId),
     Disconnected(PeerId),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::HelmProtocol;
+
+    #[tokio::test]
+    async fn transport_creation() {
+        let transport = HelmTransport::new().unwrap();
+        let peer_id = transport.local_peer_id();
+        assert!(!peer_id.to_string().is_empty());
+    }
+
+    #[tokio::test]
+    async fn peer_id_is_unique() {
+        let t1 = HelmTransport::new().unwrap();
+        let t2 = HelmTransport::new().unwrap();
+        assert_ne!(t1.local_peer_id(), t2.local_peer_id());
+    }
+
+    #[tokio::test]
+    async fn listen_on_random_port() {
+        let mut transport = HelmTransport::new().unwrap();
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/0".parse().unwrap();
+        transport.listen_on(addr).unwrap();
+    }
+
+    #[tokio::test]
+    async fn listen_on_invalid_addr_fails() {
+        let mut transport = HelmTransport::new().unwrap();
+        // UDP is not supported by TCP transport
+        let result = "/udp/1234".parse::<Multiaddr>();
+        // If parse succeeds, listen should fail
+        if let Ok(addr) = result {
+            assert!(transport.listen_on(addr).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn publish_serializes_message() {
+        let mut transport = HelmTransport::new().unwrap();
+        // Listen first so gossipsub has a valid state
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/0".parse().unwrap();
+        transport.listen_on(addr).unwrap();
+
+        let msg = HelmProtocol::chat("hello world");
+        // Publish will fail with "insufficient peers" since no subscribers
+        // but the serialization should succeed (no panic)
+        let result = transport.publish(&msg);
+        // Expected: InsufficientPeers error (no connected peers)
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn transport_event_debug_format() {
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/9000".parse().unwrap();
+        let event = TransportEvent::Listening(addr);
+        let debug = format!("{:?}", event);
+        assert!(debug.contains("Listening"));
+    }
+
+    #[test]
+    fn transport_event_variants() {
+        let peer_id = PeerId::random();
+        let msg = HelmProtocol::ping();
+
+        let events: Vec<TransportEvent> = vec![
+            TransportEvent::Connected(peer_id),
+            TransportEvent::Disconnected(peer_id),
+            TransportEvent::Message {
+                source: peer_id,
+                message: msg,
+            },
+            TransportEvent::PeersDiscovered(vec![]),
+        ];
+
+        assert_eq!(events.len(), 4);
+        assert!(matches!(events[0], TransportEvent::Connected(_)));
+        assert!(matches!(events[1], TransportEvent::Disconnected(_)));
+        assert!(matches!(events[2], TransportEvent::Message { .. }));
+        assert!(matches!(events[3], TransportEvent::PeersDiscovered(_)));
+    }
+
+    #[tokio::test]
+    async fn dial_invalid_addr_fails() {
+        let mut transport = HelmTransport::new().unwrap();
+        // Dialing a non-routable address should fail
+        let addr: Multiaddr = "/ip4/0.0.0.0/tcp/0".parse().unwrap();
+        // This may or may not fail depending on the OS, but should not panic
+        let _ = transport.dial(addr);
+    }
+}

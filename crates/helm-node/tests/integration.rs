@@ -5,6 +5,7 @@ use helm_net::transport::HelmTransport;
 
 use helm_agent::{AgentPlugin, AgentPluginConfig, AgentId, AgentAction};
 use helm_agent::capability::Capability;
+use helm_agent::WombPlugin;
 
 use helm_token::{
     TokenPlugin, TokenPluginConfig, GenesisConfig, Address, TokenAmount,
@@ -13,6 +14,7 @@ use helm_token::{
 use helm_store::{StorePlugin, StorePluginConfig, KvStore};
 use helm_identity::{IdentityPlugin, IdentityPluginConfig};
 use helm_governance::{GovernancePlugin, GovernanceConfig};
+use helm_engine::CoreApiPlugin;
 
 // ---------------------------------------------------------------------------
 // Transport & Protocol basics (from Phase 1-2)
@@ -824,4 +826,210 @@ async fn e2e_governance_cross_plugin_flow() {
         assert_eq!(target_plugin, "helm-agent");
         assert_eq!(event_type, "proposal_submitted");
     }
+}
+
+// ---------------------------------------------------------------------------
+// E2E: CoreApiPlugin — Mother Agent brain
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn e2e_core_api_registers_agents_on_born() {
+    let mut ctx = PluginContext::new("test-node".to_string());
+    let mut core = CoreApiPlugin::with_defaults();
+
+    core.on_start(&mut ctx).await.unwrap();
+
+    // Simulate 3 agents being born
+    for i in 0..3 {
+        let born = PluginEvent::AgentBorn {
+            agent_id: format!("agent-{}", i),
+            capability: "compute".to_string(),
+        };
+        core.on_event(&mut ctx, &born).await.unwrap();
+    }
+
+    assert_eq!(core.core().agent_count(), 3);
+    assert_eq!(core.core().trust_score("agent-0"), Some(0.5));
+    assert_eq!(core.core().trust_score("agent-2"), Some(0.5));
+    assert_eq!(core.core().threat_level(), 0.0);
+}
+
+#[tokio::test]
+async fn e2e_core_api_query_response() {
+    let mut ctx = PluginContext::new("test-node".to_string());
+    let mut core = CoreApiPlugin::with_defaults();
+
+    // Register an agent
+    let born = PluginEvent::AgentBorn {
+        agent_id: "bot-1".to_string(),
+        capability: "security".to_string(),
+    };
+    core.on_event(&mut ctx, &born).await.unwrap();
+    ctx.drain_events();
+
+    // Query threat level
+    let query = PluginEvent::Custom {
+        source_plugin: "test".to_string(),
+        target_plugin: "helm-core-api".to_string(),
+        event_type: "core_query".to_string(),
+        payload: serde_json::json!({
+            "query": "threat_level",
+            "reply_to": "test",
+        }),
+    };
+    core.on_event(&mut ctx, &query).await.unwrap();
+
+    let events = ctx.drain_events();
+    assert_eq!(events.len(), 1);
+    if let PluginEvent::Custom { payload, .. } = &events[0] {
+        assert_eq!(payload["threat_level"], 0.0);
+        assert_eq!(payload["agent_count"], 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// E2E: All 7 plugins lifecycle (including CoreApi and Womb)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn e2e_all_seven_plugins_lifecycle() {
+    let mut ctx = PluginContext::new("genesis-node".to_string());
+
+    let mut store = StorePlugin::new(StorePluginConfig::default());
+    let mut agent = AgentPlugin::new(AgentPluginConfig::default());
+    let mut token = TokenPlugin::new(TokenPluginConfig {
+        is_genesis: true,
+        genesis_config: Some(genesis_addresses()),
+        ticks_per_epoch: 100,
+        base_api_price: 1,
+    });
+    let mut identity = IdentityPlugin::new(IdentityPluginConfig::default());
+    let mut governance = GovernancePlugin::with_defaults();
+    let mut womb = WombPlugin::with_defaults();
+    let mut core_api = CoreApiPlugin::with_defaults();
+
+    // Start all 7 plugins
+    store.on_start(&mut ctx).await.unwrap();
+    agent.on_start(&mut ctx).await.unwrap();
+    token.on_start(&mut ctx).await.unwrap();
+    identity.on_start(&mut ctx).await.unwrap();
+    governance.on_start(&mut ctx).await.unwrap();
+    womb.on_start(&mut ctx).await.unwrap();
+    core_api.on_start(&mut ctx).await.unwrap();
+
+    // Run ticks
+    for _ in 0..5 {
+        store.on_tick(&mut ctx).await.unwrap();
+        agent.on_tick(&mut ctx).await.unwrap();
+        token.on_tick(&mut ctx).await.unwrap();
+        identity.on_tick(&mut ctx).await.unwrap();
+        governance.on_tick(&mut ctx).await.unwrap();
+        womb.on_tick(&mut ctx).await.unwrap();
+        core_api.on_tick(&mut ctx).await.unwrap();
+    }
+
+    // AgentBorn → all listeners
+    let born = PluginEvent::AgentBorn {
+        agent_id: "sovereign-1".to_string(),
+        capability: "network".to_string(),
+    };
+    identity.on_event(&mut ctx, &born).await.unwrap();
+    core_api.on_event(&mut ctx, &born).await.unwrap();
+
+    assert_eq!(identity.spanner().active_count(), 1);
+    assert_eq!(core_api.core().agent_count(), 1);
+
+    // Graceful shutdown all 7
+    store.on_shutdown(&mut ctx).await.unwrap();
+    agent.on_shutdown(&mut ctx).await.unwrap();
+    token.on_shutdown(&mut ctx).await.unwrap();
+    identity.on_shutdown(&mut ctx).await.unwrap();
+    governance.on_shutdown(&mut ctx).await.unwrap();
+    womb.on_shutdown(&mut ctx).await.unwrap();
+    core_api.on_shutdown(&mut ctx).await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// E2E: DNA → DID metadata binding (WombPlugin → IdentityPlugin)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn e2e_dna_to_did_metadata_binding() {
+    let mut ctx = PluginContext::new("test-node".to_string());
+
+    let mut womb = WombPlugin::with_defaults();
+    let mut identity = IdentityPlugin::new(IdentityPluginConfig::default());
+
+    womb.on_start(&mut ctx).await.unwrap();
+    identity.on_start(&mut ctx).await.unwrap();
+    ctx.drain_events();
+
+    // Spawn an agent via WombPlugin
+    let spawn = PluginEvent::Custom {
+        source_plugin: "helm-agent".to_string(),
+        target_plugin: "helm-womb".to_string(),
+        event_type: "spawn_request".to_string(),
+        payload: serde_json::json!({
+            "name": "dna-test-agent",
+            "capability": "security",
+            "creator": "did:helm:test-creator",
+            "description": "Testing DNA-DID binding",
+            "launch_token": false,
+        }),
+    };
+
+    womb.on_event(&mut ctx, &spawn).await.unwrap();
+    assert_eq!(womb.births().len(), 1);
+
+    // Drain and route events to IdentityPlugin
+    let events = ctx.drain_events();
+    // Expected: AgentBorn + dna_metadata + womb_wallet_create + agent_spawned
+    assert!(events.len() >= 3, "expected at least 3 events, got {}", events.len());
+
+    // Route all events to identity plugin
+    for event in &events {
+        identity.on_event(&mut ctx, event).await.unwrap();
+    }
+
+    // Identity should have registered the agent
+    assert_eq!(identity.spanner().active_count(), 1);
+
+    // Check DNA metadata was bound
+    let agent_id = womb.births()[0].agent_id.as_str();
+    let entry = identity.spanner().resolve_by_agent(agent_id).unwrap();
+    assert!(entry.bond.is_active());
+
+    // DNA metadata should be in bond
+    let dna_meta = entry.bond.metadata.get("dna");
+    assert!(dna_meta.is_some(), "DNA metadata should be stored in bond");
+    let dna_str = dna_meta.unwrap();
+    assert!(dna_str.contains("security"), "DNA should contain primary capability");
+
+    // Birth G-metric metadata
+    let g_meta = entry.bond.metadata.get("birth_g_metric");
+    assert!(g_meta.is_some(), "birth_g_metric should be stored");
+}
+
+// ---------------------------------------------------------------------------
+// E2E: Shutdown handle (graceful EventLoop shutdown)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn e2e_shutdown_handle_works() {
+    let config = HelmConfig::default();
+    let mut runtime = Runtime::new(config);
+
+    runtime.register_plugin(Box::new(
+        StorePlugin::new(StorePluginConfig::default()),
+    ));
+
+    let handle = runtime.run().await.unwrap();
+
+    // EventLoop is running in the background. Signal shutdown.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    handle.shutdown();
+
+    // Give it a moment to shut down cleanly
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // If we reach here without hanging, shutdown works
 }

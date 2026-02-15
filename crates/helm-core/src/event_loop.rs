@@ -1,6 +1,7 @@
 use anyhow::Result;
 use tracing::{info, warn, debug};
 use std::time::Duration;
+use tokio::sync::watch;
 
 use helm_net::transport::{HelmTransport, TransportEvent};
 use helm_net::protocol::HelmProtocol;
@@ -14,23 +15,42 @@ const DEFAULT_TICK_INTERVAL_MS: u64 = 100;
 /// Maximum inter-plugin event routing rounds per tick (prevents infinite loops).
 const MAX_EVENT_ROUNDS: usize = 8;
 
+/// Handle to signal the EventLoop to shut down gracefully.
+#[derive(Clone)]
+pub struct ShutdownHandle {
+    tx: watch::Sender<bool>,
+}
+
+impl ShutdownHandle {
+    /// Signal the EventLoop to shut down.
+    pub fn shutdown(&self) {
+        let _ = self.tx.send(true);
+    }
+}
+
 /// Main event loop: drives the transport and dispatches events to plugins.
 pub struct EventLoop {
     transport: HelmTransport,
     config: HelmConfig,
     plugins: Vec<Box<dyn Plugin>>,
     tick_interval_ms: u64,
+    shutdown_rx: watch::Receiver<bool>,
 }
 
 impl EventLoop {
-    pub fn new(config: HelmConfig, plugins: Vec<Box<dyn Plugin>>) -> Result<Self> {
+    pub fn new(config: HelmConfig, plugins: Vec<Box<dyn Plugin>>) -> Result<(Self, ShutdownHandle)> {
         let transport = HelmTransport::new()?;
-        Ok(Self {
-            transport,
-            config,
-            plugins,
-            tick_interval_ms: DEFAULT_TICK_INTERVAL_MS,
-        })
+        let (tx, rx) = watch::channel(false);
+        Ok((
+            Self {
+                transport,
+                config,
+                plugins,
+                tick_interval_ms: DEFAULT_TICK_INTERVAL_MS,
+                shutdown_rx: rx,
+            },
+            ShutdownHandle { tx },
+        ))
     }
 
     /// Set tick interval.
@@ -85,8 +105,20 @@ impl EventLoop {
                     self.handle_tick(&mut ctx).await;
                     self.route_events(&mut ctx).await;
                 }
+                _ = self.shutdown_rx.changed() => {
+                    if *self.shutdown_rx.borrow() {
+                        info!("Shutdown signal received, draining events...");
+                        self.route_events(&mut ctx).await;
+                        break;
+                    }
+                }
             }
         }
+
+        // Graceful shutdown: notify all plugins
+        self.shutdown_plugins(&mut ctx).await?;
+        info!("EventLoop terminated gracefully");
+        Ok(())
     }
 
     /// Handle a transport event.
@@ -170,10 +202,9 @@ impl EventLoop {
     }
 
     /// Graceful shutdown: notify all plugins.
-    pub async fn shutdown(&mut self) -> Result<()> {
-        let mut ctx = PluginContext::new(self.config.node.name.clone());
+    async fn shutdown_plugins(&mut self, ctx: &mut PluginContext) -> Result<()> {
         for plugin in &mut self.plugins {
-            if let Err(e) = plugin.on_shutdown(&mut ctx).await {
+            if let Err(e) = plugin.on_shutdown(ctx).await {
                 warn!("Plugin '{}' failed on_shutdown: {e}", plugin.name());
             }
         }

@@ -184,6 +184,7 @@ impl PaymentProtocol {
     }
 
     /// Create a new escrow contract (state: Created).
+    #[allow(clippy::too_many_arguments)]
     pub fn create_escrow(
         &mut self,
         buyer: &Address,
@@ -200,7 +201,7 @@ impl PaymentProtocol {
         if deadline <= self.current_epoch {
             return Err(X402Error::InvalidDeadline);
         }
-        if quality_threshold < 0.0 || quality_threshold > 1.0 {
+        if !(0.0..=1.0).contains(&quality_threshold) {
             return Err(X402Error::InvalidThreshold);
         }
 
@@ -599,9 +600,9 @@ fn deterministic_hash(data: &[u8]) -> [u8; 32] {
         h = h.wrapping_mul(33).wrapping_add(byte as u64);
         hash[i % 32] ^= (h & 0xFF) as u8;
     }
-    for i in 0..32 {
-        h = h.wrapping_mul(33).wrapping_add(hash[i] as u64);
-        hash[i] = (h & 0xFF) as u8;
+    for byte in &mut hash {
+        h = h.wrapping_mul(33).wrapping_add(*byte as u64);
+        *byte = (h & 0xFF) as u8;
     }
     hash
 }
