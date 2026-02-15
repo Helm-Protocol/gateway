@@ -84,6 +84,7 @@ async fn cmd_run(
     banner::print_module_status("helm-agent", "Agent framework + Socratic Claw + Womb", true);
     banner::print_module_status("helm-token", "Token economics + Treasury + Staking", true);
     banner::print_module_status("helm-identity", "DID-first identity + Agent Spanner", true);
+    banner::print_module_status("helm-governance", "Proposals + stake-weighted voting", true);
     println!();
 
     tracing::info!("Helm Protocol v{}", env!("CARGO_PKG_VERSION"));
@@ -112,11 +113,17 @@ async fn cmd_run(
         helm_identity::IdentityPlugin::new(helm_identity::IdentityPluginConfig::default()),
     ));
 
+    // Governance plugin (proposals, stake-weighted voting, quorum, timelock)
+    runtime.register_plugin(Box::new(
+        helm_governance::GovernancePlugin::with_defaults(),
+    ));
+
     banner::print_section("Plugins");
     banner::print_module_status("helm-store", "KV + sync", true);
     banner::print_module_status("helm-agent", "agents + Socratic Claw", true);
     banner::print_module_status("helm-token", "token economics", true);
     banner::print_module_status("helm-identity", "DID + Identity Bonds + Reputation", true);
+    banner::print_module_status("helm-governance", "proposals + voting", true);
     println!();
 
     runtime.run().await
@@ -153,6 +160,11 @@ fn cmd_status() -> Result<()> {
     banner::print_info("Staking", "4 types (Founder/Cabinet/Mining/General)");
     banner::print_info("Treasury", "15% Edge API revenue → 4 buckets");
     banner::print_info("Network Tax", "15% on agent API usage");
+
+    banner::print_section("Governance");
+    banner::print_info("Proposals", "5 types (Param/Treasury/Upgrade/Emergency/Custom)");
+    banner::print_info("Voting", "Stake-weighted, quorum 10%, threshold 51%");
+    banner::print_info("Timelock", "5 epochs between pass and execution");
 
     banner::print_section("Codec Pipeline");
     banner::print_info("Layer 1", "Golomb-Rice (source coding / compression)");
@@ -361,6 +373,7 @@ fn cmd_info() -> Result<()> {
     banner::print_module_status("helm-agent", "Agent framework + Socratic Claw + Womb", true);
     banner::print_module_status("helm-token", "Token economics + Staking + Treasury", true);
     banner::print_module_status("helm-identity", "DID + Identity Bonds + Agent Spanner + Reputation", true);
+    banner::print_module_status("helm-governance", "Proposals + Stake-Weighted Voting + Timelock", true);
     banner::print_module_status("helm-node", "CLI + Moderator Bot + binary entry", true);
 
     banner::print_section("Architecture");

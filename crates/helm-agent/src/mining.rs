@@ -19,6 +19,24 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// --- Mining Weight Constants (basis points, sum = 10000) ---
+/// Total basis points across all categories.
+pub const TOTAL_WEIGHT_BP: u32 = 10_000;
+/// ServiceFee: 30% — revenue from serving API/compute.
+pub const SERVICEFEE_WEIGHT_BP: u32 = 3000;
+/// Code: 15% — code contributions, patches.
+pub const CODE_WEIGHT_BP: u32 = 1500;
+/// Staking: 15% — proportional to staked amount.
+pub const STAKING_WEIGHT_BP: u32 = 1500;
+/// Governance: 10% — proposal voting, parameter tuning.
+pub const GOVERNANCE_WEIGHT_BP: u32 = 1000;
+/// PeerReview: 10% — verifying other agents' work.
+pub const PEERREVIEW_WEIGHT_BP: u32 = 1000;
+/// Security: 10% — vulnerability reports, audits.
+pub const SECURITY_WEIGHT_BP: u32 = 1000;
+/// Relay: 10% — network relay, message forwarding.
+pub const RELAY_WEIGHT_BP: u32 = 1000;
+
 /// Mining categories and their weights (basis points, total = 10000).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MiningCategory {
@@ -55,13 +73,13 @@ impl MiningCategory {
     /// Default weight in basis points.
     pub fn default_weight_bp(&self) -> u32 {
         match self {
-            MiningCategory::ServiceFee => 3000,
-            MiningCategory::Code => 1500,
-            MiningCategory::Staking => 1500,
-            MiningCategory::Governance => 1000,
-            MiningCategory::PeerReview => 1000,
-            MiningCategory::Security => 1000,
-            MiningCategory::Relay => 1000,
+            MiningCategory::ServiceFee => SERVICEFEE_WEIGHT_BP,
+            MiningCategory::Code => CODE_WEIGHT_BP,
+            MiningCategory::Staking => STAKING_WEIGHT_BP,
+            MiningCategory::Governance => GOVERNANCE_WEIGHT_BP,
+            MiningCategory::PeerReview => PEERREVIEW_WEIGHT_BP,
+            MiningCategory::Security => SECURITY_WEIGHT_BP,
+            MiningCategory::Relay => RELAY_WEIGHT_BP,
         }
     }
 }
@@ -146,7 +164,7 @@ impl MiningPool {
     /// Create with custom category weights.
     pub fn with_weights(weights: HashMap<MiningCategory, u32>) -> Result<Self, MiningError> {
         let total: u32 = weights.values().sum();
-        if total != 10_000 {
+        if total != TOTAL_WEIGHT_BP {
             return Err(MiningError::InvalidWeights(total));
         }
         Ok(Self {
@@ -199,7 +217,7 @@ impl MiningPool {
         // Per-category reward pool
         let mut category_pools: HashMap<MiningCategory, u128> = HashMap::new();
         for (&cat, &weight_bp) in &self.weights {
-            let pool = proportional_u128(epoch_reward, weight_bp as u128, 10_000);
+            let pool = proportional_u128(epoch_reward, weight_bp as u128, TOTAL_WEIGHT_BP as u128);
             category_pools.insert(cat, pool);
         }
 
@@ -329,7 +347,7 @@ fn gcd(mut a: u128, mut b: u128) -> u128 {
 /// Mining errors.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum MiningError {
-    #[error("category weights must sum to 10000, got {0}")]
+    #[error("category weights must sum to {TOTAL_WEIGHT_BP}, got {0}")]
     InvalidWeights(u32),
 }
 
@@ -343,12 +361,20 @@ mod tests {
             .iter()
             .map(|c| c.default_weight_bp())
             .sum();
-        assert_eq!(total, 10_000);
+        assert_eq!(total, TOTAL_WEIGHT_BP);
     }
 
     #[test]
-    fn all_categories() {
-        assert_eq!(MiningCategory::all().len(), 7);
+    fn all_categories_present() {
+        let cats = MiningCategory::all();
+        assert_eq!(cats.len(), 7);
+        assert!(cats.contains(&MiningCategory::ServiceFee));
+        assert!(cats.contains(&MiningCategory::Code));
+        assert!(cats.contains(&MiningCategory::Staking));
+        assert!(cats.contains(&MiningCategory::Governance));
+        assert!(cats.contains(&MiningCategory::PeerReview));
+        assert!(cats.contains(&MiningCategory::Security));
+        assert!(cats.contains(&MiningCategory::Relay));
     }
 
     #[test]

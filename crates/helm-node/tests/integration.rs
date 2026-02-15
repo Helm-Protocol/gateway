@@ -12,6 +12,7 @@ use helm_token::{
 };
 use helm_store::{StorePlugin, StorePluginConfig, KvStore};
 use helm_identity::{IdentityPlugin, IdentityPluginConfig};
+use helm_governance::{GovernancePlugin, GovernanceConfig};
 
 // ---------------------------------------------------------------------------
 // Transport & Protocol basics (from Phase 1-2)
@@ -135,7 +136,13 @@ fn runtime_with_all_plugins() {
     runtime.register_plugin(Box::new(
         TokenPlugin::new(TokenPluginConfig::default()),
     ));
-    // Runtime created with 3 plugins (no crash)
+    runtime.register_plugin(Box::new(
+        IdentityPlugin::new(IdentityPluginConfig::default()),
+    ));
+    runtime.register_plugin(Box::new(
+        GovernancePlugin::with_defaults(),
+    ));
+    // Runtime created with 5 plugins (no crash)
 }
 
 // ---------------------------------------------------------------------------
@@ -576,7 +583,7 @@ async fn e2e_identity_verify_via_event_bus() {
 }
 
 #[tokio::test]
-async fn e2e_all_four_plugins_lifecycle() {
+async fn e2e_all_five_plugins_lifecycle() {
     let mut ctx = PluginContext::new("genesis-node".to_string());
 
     let mut store = StorePlugin::new(StorePluginConfig::default());
@@ -588,12 +595,14 @@ async fn e2e_all_four_plugins_lifecycle() {
         base_api_price: 1,
     });
     let mut identity = IdentityPlugin::new(IdentityPluginConfig::default());
+    let mut governance = GovernancePlugin::with_defaults();
 
-    // Start all 4 plugins
+    // Start all 5 plugins
     store.on_start(&mut ctx).await.unwrap();
     agent.on_start(&mut ctx).await.unwrap();
     token.on_start(&mut ctx).await.unwrap();
     identity.on_start(&mut ctx).await.unwrap();
+    governance.on_start(&mut ctx).await.unwrap();
 
     // Run ticks
     for _ in 0..5 {
@@ -601,6 +610,7 @@ async fn e2e_all_four_plugins_lifecycle() {
         agent.on_tick(&mut ctx).await.unwrap();
         token.on_tick(&mut ctx).await.unwrap();
         identity.on_tick(&mut ctx).await.unwrap();
+        governance.on_tick(&mut ctx).await.unwrap();
     }
 
     // AgentBorn → routes to Identity
@@ -611,11 +621,12 @@ async fn e2e_all_four_plugins_lifecycle() {
     identity.on_event(&mut ctx, &born).await.unwrap();
     assert_eq!(identity.spanner().active_count(), 1);
 
-    // Graceful shutdown
+    // Graceful shutdown all 5
     store.on_shutdown(&mut ctx).await.unwrap();
     agent.on_shutdown(&mut ctx).await.unwrap();
     token.on_shutdown(&mut ctx).await.unwrap();
     identity.on_shutdown(&mut ctx).await.unwrap();
+    governance.on_shutdown(&mut ctx).await.unwrap();
 }
 
 #[tokio::test]
@@ -645,4 +656,172 @@ async fn e2e_identity_terminate_via_event_bus() {
     identity.on_event(&mut ctx, &terminate).await.unwrap();
 
     assert_eq!(identity.spanner().active_count(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// E2E: Governance Plugin — proposal + vote via event bus
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn e2e_governance_submit_and_vote() {
+    // ticks_per_epoch=5 for fast epoch advancement
+    let mut gov = GovernancePlugin::new(GovernanceConfig::default(), 5);
+    gov.engine.set_stake("did:helm:voter1", 100);
+    gov.engine.set_stake("did:helm:voter2", 50);
+    let mut ctx = PluginContext::new("test-node".to_string());
+    gov.on_start(&mut ctx).await.unwrap();
+
+    // Submit proposal via event bus (starts at epoch current+1)
+    let submit = PluginEvent::Custom {
+        source_plugin: "helm-agent".to_string(),
+        target_plugin: helm_governance::GOVERNANCE_PLUGIN_NAME.to_string(),
+        event_type: helm_governance::EVENT_SUBMIT_PROPOSAL.to_string(),
+        payload: serde_json::json!({
+            "proposer": "did:helm:voter1",
+            "title": "Increase mining weight",
+            "body": "Change ServiceFee from 30% to 35%",
+            "reply_to": "helm-agent",
+        }),
+    };
+    gov.on_event(&mut ctx, &submit).await.unwrap();
+    assert_eq!(gov.registry.total(), 1);
+
+    let events = ctx.drain_events();
+    assert_eq!(events.len(), 1);
+    if let PluginEvent::Custom { payload, event_type, .. } = &events[0] {
+        assert_eq!(event_type, helm_governance::EVENT_PROPOSAL_SUBMITTED);
+        assert_eq!(payload["proposal_id"], 1);
+    } else {
+        panic!("expected Custom event with proposal_submitted");
+    }
+
+    // Advance epoch via ticks to activate the proposal
+    for _ in 0..5 {
+        gov.on_tick(&mut ctx).await.unwrap();
+    }
+    assert_eq!(gov.engine.current_epoch(), 1);
+    assert_eq!(
+        gov.registry.get(1).unwrap().state,
+        helm_governance::ProposalState::Active,
+        "proposal should be Active after epoch advance"
+    );
+
+    // Vote via event bus
+    let vote = PluginEvent::Custom {
+        source_plugin: "helm-agent".to_string(),
+        target_plugin: helm_governance::GOVERNANCE_PLUGIN_NAME.to_string(),
+        event_type: helm_governance::EVENT_VOTE.to_string(),
+        payload: serde_json::json!({
+            "proposal_id": 1,
+            "voter": "did:helm:voter1",
+            "support": true,
+            "reply_to": "helm-agent",
+        }),
+    };
+    gov.on_event(&mut ctx, &vote).await.unwrap();
+
+    let events = ctx.drain_events();
+    if let PluginEvent::Custom { payload, event_type, .. } = &events[0] {
+        assert_eq!(event_type, helm_governance::EVENT_VOTE_RESULT);
+        assert_eq!(payload["success"], true);
+    } else {
+        panic!("expected Custom event with vote_result");
+    }
+
+    // Check vote was recorded
+    let proposal = gov.registry.get(1).unwrap();
+    assert_eq!(proposal.votes_for, 100);
+    assert_eq!(proposal.voter_count(), 1);
+    assert!(proposal.has_voted("did:helm:voter1"));
+}
+
+#[tokio::test]
+async fn e2e_governance_epoch_finalization() {
+    let mut gov = GovernancePlugin::new(
+        GovernanceConfig {
+            quorum: 0.1,
+            approval_threshold: 0.51,
+            voting_period_epochs: 5,
+            timelock_epochs: 2,
+            ..GovernanceConfig::default()
+        },
+        5,
+    );
+    gov.engine.set_stake("alice", 100);
+    let mut ctx = PluginContext::new("test-node".to_string());
+
+    // Submit proposal at epoch 0, voting 1..6
+    let id = gov.registry.submit(
+        "alice",
+        helm_governance::ProposalType::Custom {
+            title: "test".into(),
+            body: "".into(),
+        },
+        1,
+        6,
+        0,
+    );
+
+    // Advance 1 epoch (tick 5 times) → should activate the proposal
+    for _ in 0..5 {
+        gov.on_tick(&mut ctx).await.unwrap();
+    }
+    assert_eq!(gov.engine.current_epoch(), 1);
+    assert_eq!(
+        gov.registry.get(id).unwrap().state,
+        helm_governance::ProposalState::Active
+    );
+
+    // Vote for it
+    gov.engine.vote(&mut gov.registry, id, "alice", true).unwrap();
+
+    // Advance past end_epoch (epoch 7)
+    for _ in 0..30 {
+        gov.on_tick(&mut ctx).await.unwrap();
+    }
+
+    // Should be finalized as Passed (100% approval, quorum met)
+    assert_eq!(
+        gov.registry.get(id).unwrap().state,
+        helm_governance::ProposalState::Passed
+    );
+}
+
+#[tokio::test]
+async fn e2e_governance_cross_plugin_flow() {
+    let mut ctx = PluginContext::new("test-node".to_string());
+
+    // Start all relevant plugins
+    let mut agent = AgentPlugin::new(AgentPluginConfig::default());
+    let mut governance = GovernancePlugin::with_defaults();
+
+    agent.on_start(&mut ctx).await.unwrap();
+    governance.on_start(&mut ctx).await.unwrap();
+
+    // Agent submits a proposal through event bus
+    let submit = PluginEvent::Custom {
+        source_plugin: "helm-agent".to_string(),
+        target_plugin: "helm-governance".to_string(),
+        event_type: "submit_proposal".to_string(),
+        payload: serde_json::json!({
+            "proposer": "did:helm:agent-gov",
+            "title": "Agent governance test",
+            "body": "Cross-plugin proposal from agent",
+            "reply_to": "helm-agent",
+        }),
+    };
+
+    // Route to governance
+    governance.on_event(&mut ctx, &submit).await.unwrap();
+
+    // Governance should have the proposal
+    assert_eq!(governance.registry.total(), 1);
+
+    // Confirmation event should be emitted back to agent
+    let events = ctx.drain_events();
+    assert!(!events.is_empty());
+    if let PluginEvent::Custom { target_plugin, event_type, .. } = &events[0] {
+        assert_eq!(target_plugin, "helm-agent");
+        assert_eq!(event_type, "proposal_submitted");
+    }
 }

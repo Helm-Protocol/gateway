@@ -12,6 +12,23 @@ use helm_net::protocol::HelmMessage;
 use crate::did::HelmKeyPair;
 use crate::spanner::AgentSpanner;
 
+// --- Identity Plugin Constants ---
+pub const PLUGIN_NAME: &str = "helm-identity";
+pub const EVENT_IDENTITY_REGISTERED: &str = "identity_registered";
+pub const EVENT_IDENTITY_VERIFIED: &str = "identity_verified";
+pub const EVENT_VERIFY_IDENTITY: &str = "verify_identity";
+pub const EVENT_HEARTBEAT: &str = "heartbeat";
+pub const EVENT_TERMINATE: &str = "terminate";
+const DEFAULT_REPLY_TARGET: &str = "helm-agent";
+const DEFAULT_WOMB_ID: &str = "plugin-womb";
+
+/// Default online threshold in seconds (5 minutes).
+pub const DEFAULT_ONLINE_THRESHOLD_SECS: u64 = 300;
+/// Default reputation decay factor per epoch.
+pub const DEFAULT_DECAY_FACTOR: f64 = 0.95;
+/// Default ticks between decay applications.
+pub const DEFAULT_DECAY_INTERVAL_TICKS: u64 = 100;
+
 /// Configuration for the Identity Plugin.
 pub struct IdentityPluginConfig {
     /// Online threshold in seconds (default 300).
@@ -25,9 +42,9 @@ pub struct IdentityPluginConfig {
 impl Default for IdentityPluginConfig {
     fn default() -> Self {
         Self {
-            online_threshold_secs: 300,
-            decay_factor: 0.95,
-            decay_interval_ticks: 100,
+            online_threshold_secs: DEFAULT_ONLINE_THRESHOLD_SECS,
+            decay_factor: DEFAULT_DECAY_FACTOR,
+            decay_interval_ticks: DEFAULT_DECAY_INTERVAL_TICKS,
         }
     }
 }
@@ -75,7 +92,7 @@ impl IdentityPlugin {
             doc,
             agent_id,
             &ctx.node_name,
-            "plugin-womb",
+            DEFAULT_WOMB_ID,
             vec![capability.to_string()],
             self.current_time,
         );
@@ -85,9 +102,9 @@ impl IdentityPlugin {
                 tracing::info!(agent = %agent_id, did = %did, "identity auto-registered via plugin");
                 // Emit confirmation event
                 ctx.emit(PluginEvent::Custom {
-                    source_plugin: "helm-identity".to_string(),
-                    target_plugin: "helm-agent".to_string(),
-                    event_type: "identity_registered".to_string(),
+                    source_plugin: PLUGIN_NAME.to_string(),
+                    target_plugin: DEFAULT_REPLY_TARGET.to_string(),
+                    event_type: EVENT_IDENTITY_REGISTERED.to_string(),
                     payload: serde_json::json!({
                         "agent_id": agent_id,
                         "did": did,
@@ -115,13 +132,13 @@ impl IdentityPlugin {
         let verified = self.spanner.verify(did, capability);
 
         ctx.emit(PluginEvent::Custom {
-            source_plugin: "helm-identity".to_string(),
+            source_plugin: PLUGIN_NAME.to_string(),
             target_plugin: payload
                 .get("reply_to")
                 .and_then(|v| v.as_str())
-                .unwrap_or("helm-agent")
+                .unwrap_or(DEFAULT_REPLY_TARGET)
                 .to_string(),
-            event_type: "identity_verified".to_string(),
+            event_type: EVENT_IDENTITY_VERIFIED.to_string(),
             payload: serde_json::json!({
                 "request_id": request_id,
                 "did": did,
@@ -135,11 +152,11 @@ impl IdentityPlugin {
 #[async_trait::async_trait]
 impl Plugin for IdentityPlugin {
     fn name(&self) -> &str {
-        "helm-identity"
+        PLUGIN_NAME
     }
 
     async fn on_start(&mut self, _ctx: &mut PluginContext) -> Result<()> {
-        tracing::info!("helm-identity plugin started");
+        tracing::info!("{} plugin started", PLUGIN_NAME);
         Ok(())
     }
 
@@ -179,12 +196,12 @@ impl Plugin for IdentityPlugin {
                 event_type,
                 payload,
                 ..
-            } if target_plugin == "helm-identity" => {
+            } if target_plugin == PLUGIN_NAME => {
                 match event_type.as_str() {
-                    "verify_identity" => {
+                    EVENT_VERIFY_IDENTITY => {
                         self.handle_verify_request(payload, ctx);
                     }
-                    "heartbeat" => {
+                    EVENT_HEARTBEAT => {
                         if let Some(did) = payload.get("did").and_then(|v| v.as_str()) {
                             let addr = payload
                                 .get("address")
@@ -193,7 +210,7 @@ impl Plugin for IdentityPlugin {
                             self.spanner.heartbeat(did, self.current_time, addr);
                         }
                     }
-                    "terminate" => {
+                    EVENT_TERMINATE => {
                         if let Some(did) = payload.get("did").and_then(|v| v.as_str()) {
                             let _ = self.spanner.terminate_agent(did, self.current_time);
                         }
@@ -210,7 +227,7 @@ impl Plugin for IdentityPlugin {
         tracing::info!(
             active = self.spanner.active_count(),
             total = self.spanner.total_count(),
-            "helm-identity plugin shutting down"
+            "{} plugin shutting down", PLUGIN_NAME
         );
         Ok(())
     }

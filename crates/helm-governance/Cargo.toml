@@ -1,0 +1,19 @@
+[package]
+name = "helm-governance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "On-chain governance for the Helm Protocol — proposals, voting, parameter tuning"
+
+[dependencies]
+helm-core = { path = "../helm-core" }
+helm-net = { path = "../helm-net" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio = { workspace = true }

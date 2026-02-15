@@ -1054,6 +1054,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "helm-governance"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "helm-core",
+ "helm-net",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "helm-identity"
 version = "0.1.0"
 dependencies = [
@@ -1093,6 +1108,8 @@ dependencies = [
  "helm-agent",
  "helm-core",
  "helm-engine",
+ "helm-governance",
+ "helm-identity",
  "helm-net",
  "helm-store",
  "helm-token",

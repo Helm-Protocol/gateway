@@ -17,7 +17,28 @@ use std::collections::HashMap;
 use crate::did::Did;
 
 /// Neutral reputation score (starting point).
-const NEUTRAL: f64 = 0.5;
+pub const NEUTRAL: f64 = 0.5;
+/// Maximum observation count for weight calculation.
+const MAX_OBSERVATION_CAP: f64 = 100.0;
+
+// --- Reputation Category Names ---
+pub const CAT_RELIABILITY: &str = "reliability";
+pub const CAT_QUALITY: &str = "quality";
+pub const CAT_SPEED: &str = "speed";
+pub const CAT_HONESTY: &str = "honesty";
+pub const CAT_UPTIME: &str = "uptime";
+
+// --- Reputation Category Weights ---
+pub const WEIGHT_RELIABILITY: f64 = 0.30;
+pub const WEIGHT_QUALITY: f64 = 0.25;
+pub const WEIGHT_SPEED: f64 = 0.10;
+pub const WEIGHT_HONESTY: f64 = 0.25;
+pub const WEIGHT_UPTIME: f64 = 0.10;
+/// Default weight for unknown categories.
+pub const WEIGHT_DEFAULT: f64 = 0.10;
+
+/// All 5 default reputation categories.
+pub const DEFAULT_CATEGORIES: &[&str] = &[CAT_RELIABILITY, CAT_QUALITY, CAT_SPEED, CAT_HONESTY, CAT_UPTIME];
 
 /// Individual category score.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,7 +62,7 @@ impl CategoryScore {
     fn apply(&mut self, delta: f64) {
         self.observations += 1;
         // Weight new observations more when few exist, less when many
-        let weight = 1.0 / (self.observations as f64).min(100.0);
+        let weight = 1.0 / (self.observations as f64).min(MAX_OBSERVATION_CAP);
         self.value = (self.value + delta * weight).clamp(0.0, 1.0);
     }
 
@@ -66,7 +87,7 @@ pub struct ReputationScore {
 impl ReputationScore {
     pub fn new() -> Self {
         let mut categories = HashMap::new();
-        for cat in &["reliability", "quality", "speed", "honesty", "uptime"] {
+        for cat in DEFAULT_CATEGORIES {
             categories.insert(cat.to_string(), CategoryScore::new());
         }
         Self { categories }
@@ -78,13 +99,12 @@ impl ReputationScore {
             return NEUTRAL;
         }
 
-        // Weights for each category
         let weights: HashMap<&str, f64> = [
-            ("reliability", 0.30),
-            ("quality", 0.25),
-            ("speed", 0.10),
-            ("honesty", 0.25),
-            ("uptime", 0.10),
+            (CAT_RELIABILITY, WEIGHT_RELIABILITY),
+            (CAT_QUALITY, WEIGHT_QUALITY),
+            (CAT_SPEED, WEIGHT_SPEED),
+            (CAT_HONESTY, WEIGHT_HONESTY),
+            (CAT_UPTIME, WEIGHT_UPTIME),
         ]
         .into_iter()
         .collect();
@@ -93,7 +113,7 @@ impl ReputationScore {
         let mut total_weight = 0.0;
 
         for (cat, score) in &self.categories {
-            let w = weights.get(cat.as_str()).copied().unwrap_or(0.1);
+            let w = weights.get(cat.as_str()).copied().unwrap_or(WEIGHT_DEFAULT);
             weighted_sum += score.value * w;
             total_weight += w;
         }

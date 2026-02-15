@@ -14,6 +14,22 @@ use std::collections::HashMap;
 use crate::token::TokenAmount;
 use crate::wallet::{Address, WalletStore};
 
+// --- Launchpad Constants ---
+/// Basis points denominator (10000 = 100%).
+pub const BASIS_POINTS: u128 = 10_000;
+/// Default swap fee: 0.3% (30 basis points).
+pub const DEFAULT_SWAP_FEE_BP: u32 = 30;
+/// Default creator fee: 0.4% (40 basis points).
+pub const DEFAULT_CREATOR_FEE_BP: u32 = 40;
+/// Default initial agent token supply: 1 billion.
+pub const DEFAULT_INITIAL_SUPPLY: u128 = 1_000_000_000;
+/// Pool/creator split: 50% of supply goes to pool.
+pub const POOL_SUPPLY_FRACTION: u128 = 2;
+
+// --- Hash Constants (djb2) ---
+const DJB2_INIT: u64 = 5381;
+const DJB2_MULTIPLIER: u64 = 33;
+
 /// Unique token identifier (hash of creator + name + timestamp).
 pub type AgentTokenId = [u8; 32];
 
@@ -96,7 +112,7 @@ impl LiquidityPool {
             lp_supply: 0,
             lp_balances: HashMap::new(),
             total_volume: 0,
-            swap_fee_bp: 30, // 0.3%
+            swap_fee_bp: DEFAULT_SWAP_FEE_BP,
             total_fees: 0,
         }
     }
@@ -139,7 +155,7 @@ impl LiquidityPool {
             return Err(LaunchpadError::NoLiquidity);
         }
 
-        let fee = proportional(helm_in, self.swap_fee_bp as u128, 10_000);
+        let fee = proportional(helm_in, self.swap_fee_bp as u128, BASIS_POINTS);
         let helm_in_after_fee = helm_in.saturating_sub(fee);
 
         // Constant product: (x + dx) * (y - dy) = x * y
@@ -175,7 +191,7 @@ impl LiquidityPool {
             self.token_reserve.saturating_add(token_in),
         );
 
-        let fee = proportional(helm_out_raw, self.swap_fee_bp as u128, 10_000);
+        let fee = proportional(helm_out_raw, self.swap_fee_bp as u128, BASIS_POINTS);
         let helm_out = helm_out_raw.saturating_sub(fee);
 
         if helm_out == 0 || helm_out > self.helm_reserve {
@@ -215,8 +231,8 @@ impl Launchpad {
             tokens: HashMap::new(),
             pools: HashMap::new(),
             creator_index: HashMap::new(),
-            default_creator_fee_bp: 40, // 0.4%
-            default_initial_supply: 1_000_000_000, // 1B agent tokens
+            default_creator_fee_bp: DEFAULT_CREATOR_FEE_BP,
+            default_initial_supply: DEFAULT_INITIAL_SUPPLY,
             current_epoch: 0,
             id_counter: 0,
         }
@@ -257,7 +273,7 @@ impl Launchpad {
             .map_err(|e| LaunchpadError::TransferFailed(format!("{}", e)))?;
 
         // Create agent token
-        let pool_tokens = supply / 2;
+        let pool_tokens = supply / POOL_SUPPLY_FRACTION;
         let creator_tokens = supply - pool_tokens;
 
         let mut balances = HashMap::new();
@@ -321,7 +337,7 @@ impl Launchpad {
         *token.balances.entry(buyer.clone()).or_insert(0) += tokens_out;
 
         // Creator fee: 0.4% of tokens_out
-        let creator_fee = proportional(tokens_out, token.creator_fee_bp as u128, 10_000);
+        let creator_fee = proportional(tokens_out, token.creator_fee_bp as u128, BASIS_POINTS);
         if creator_fee > 0 {
             let creator = token.creator.clone();
             *token.balances.entry(creator).or_insert(0) += creator_fee;
@@ -357,7 +373,7 @@ impl Launchpad {
             .map_err(|e| LaunchpadError::TransferFailed(format!("{}", e)))?;
 
         // Creator fee on HELM out
-        let creator_fee_helm = proportional(helm_out, token.creator_fee_bp as u128, 10_000);
+        let creator_fee_helm = proportional(helm_out, token.creator_fee_bp as u128, BASIS_POINTS);
         if creator_fee_helm > 0 {
             token.total_creator_fees += creator_fee_helm;
         }
@@ -476,13 +492,13 @@ fn isqrt(n: u128) -> u128 {
 
 fn deterministic_hash(data: &[u8]) -> [u8; 32] {
     let mut hash = [0u8; 32];
-    let mut h: u64 = 5381;
+    let mut h: u64 = DJB2_INIT;
     for (i, &byte) in data.iter().enumerate() {
-        h = h.wrapping_mul(33).wrapping_add(byte as u64);
+        h = h.wrapping_mul(DJB2_MULTIPLIER).wrapping_add(byte as u64);
         hash[i % 32] ^= (h & 0xFF) as u8;
     }
     for i in 0..32 {
-        h = h.wrapping_mul(33).wrapping_add(hash[i] as u64);
+        h = h.wrapping_mul(DJB2_MULTIPLIER).wrapping_add(hash[i] as u64);
         hash[i] = (h & 0xFF) as u8;
     }
     hash
@@ -495,6 +511,8 @@ fn hex_short(id: &[u8; 32]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ONE: u128 = 10u128.pow(18);
 
     fn setup() -> (Launchpad, WalletStore, Address) {
         let mut wallets = WalletStore::new();
@@ -524,18 +542,28 @@ mod tests {
     }
 
     #[test]
-    fn launch_creates_pool() {
+    fn launch_creates_pool_with_correct_reserves() {
         let (mut pad, mut wallets, creator) = setup();
+        let helm_seed = 1000 * ONE;
 
         let id = pad
-            .launch(&creator, "Token", "TKN", 1000 * 10u128.pow(18), &mut wallets, 0)
+            .launch(&creator, "Token", "TKN", helm_seed, &mut wallets, 0)
             .unwrap();
 
         let pool = pad.get_pool(&id).unwrap();
-        assert_eq!(pool.helm_reserve, 1000 * 10u128.pow(18));
-        assert_eq!(pool.token_reserve, 500_000_000);
-        assert!(pool.price() > 0.0);
-        assert!(pool.lp_supply > 0);
+        let expected_pool_tokens = DEFAULT_INITIAL_SUPPLY / POOL_SUPPLY_FRACTION;
+
+        assert_eq!(pool.helm_reserve, helm_seed, "HELM reserve should match seed");
+        assert_eq!(pool.token_reserve, expected_pool_tokens, "token reserve should be 50% of supply");
+        assert!(pool.price() > 0.0, "price must be positive");
+
+        // LP tokens = sqrt(helm * tokens)
+        let expected_lp = isqrt(helm_seed.saturating_mul(expected_pool_tokens));
+        assert_eq!(pool.lp_supply, expected_lp, "LP supply should equal sqrt(helm*tokens)");
+
+        // Verify constant product
+        let k = pool.invariant();
+        assert_eq!(k, helm_seed.saturating_mul(expected_pool_tokens), "k = x * y");
     }
 
     #[test]
@@ -553,24 +581,48 @@ mod tests {
     }
 
     #[test]
-    fn buy_tokens() {
+    fn buy_tokens_verifies_amm_math() {
         let (mut pad, mut wallets, creator) = setup();
+        let helm_seed = 100 * ONE;
 
         let id = pad
-            .launch(&creator, "Token", "TKN", 100 * 10u128.pow(18), &mut wallets, 0)
+            .launch(&creator, "Token", "TKN", helm_seed, &mut wallets, 0)
             .unwrap();
 
-        // Create buyer with HELM
+        let pool_before = pad.get_pool(&id).unwrap();
+        let helm_reserve_before = pool_before.helm_reserve;
+        let token_reserve_before = pool_before.token_reserve;
+        let k_before = pool_before.invariant();
+
         let (buyer, _) = Address::generate();
+        let helm_in = 10 * ONE;
         wallets.deposit(&buyer, TokenAmount::from_tokens(1000), "fund").unwrap();
 
         let tokens_received = pad
-            .buy(&buyer, &id, 10 * 10u128.pow(18), &mut wallets, 0)
+            .buy(&buyer, &id, helm_in, &mut wallets, 0)
             .unwrap();
 
-        assert!(tokens_received > 0);
+        // Verify AMM math: tokens_out = token_reserve * helm_in_after_fee / (helm_reserve + helm_in_after_fee)
+        let fee = proportional(helm_in, DEFAULT_SWAP_FEE_BP as u128, BASIS_POINTS);
+        let helm_after_fee = helm_in - fee;
+        let expected_tokens = proportional(
+            token_reserve_before,
+            helm_after_fee,
+            helm_reserve_before + helm_after_fee,
+        );
+        assert_eq!(tokens_received, expected_tokens, "AMM formula mismatch");
+
+        // Verify pool invariant grew (fees added to reserves)
+        let pool_after = pad.get_pool(&id).unwrap();
+        assert!(pool_after.invariant() >= k_before, "k must grow with fees");
+
+        // Verify reserves updated correctly
+        assert_eq!(pool_after.helm_reserve, helm_reserve_before + helm_in);
+        assert_eq!(pool_after.token_reserve, token_reserve_before - tokens_received);
+
+        // Verify buyer has tokens
         let token = pad.get_token(&id).unwrap();
-        assert!(token.balance_of(&buyer) > 0);
+        assert_eq!(token.balance_of(&buyer), tokens_received);
     }
 
     #[test]
@@ -598,20 +650,28 @@ mod tests {
     }
 
     #[test]
-    fn creator_fee_collected() {
+    fn creator_fee_exactly_40bp() {
         let (mut pad, mut wallets, creator) = setup();
 
         let id = pad
-            .launch(&creator, "Token", "TKN", 100 * 10u128.pow(18), &mut wallets, 0)
+            .launch(&creator, "Token", "TKN", 100 * ONE, &mut wallets, 0)
             .unwrap();
+
+        let creator_balance_before = pad.get_token(&id).unwrap().balance_of(&creator);
 
         let (buyer, _) = Address::generate();
         wallets.deposit(&buyer, TokenAmount::from_tokens(1000), "fund").unwrap();
 
-        pad.buy(&buyer, &id, 50 * 10u128.pow(18), &mut wallets, 0).unwrap();
+        let tokens_received = pad.buy(&buyer, &id, 50 * ONE, &mut wallets, 0).unwrap();
 
         let token = pad.get_token(&id).unwrap();
-        assert!(token.total_creator_fees > 0);
+        // Creator fee = 0.4% of tokens_received
+        let expected_fee = proportional(tokens_received, DEFAULT_CREATOR_FEE_BP as u128, BASIS_POINTS);
+        assert_eq!(token.total_creator_fees, expected_fee, "creator fee should be exactly 0.4% of tokens bought");
+
+        // Creator balance should increase by exactly the fee
+        let creator_balance_after = token.balance_of(&creator);
+        assert_eq!(creator_balance_after - creator_balance_before, expected_fee);
     }
 
     #[test]
@@ -659,20 +719,24 @@ mod tests {
     }
 
     #[test]
-    fn pool_volume_tracked() {
+    fn pool_volume_and_fee_exact() {
         let (mut pad, mut wallets, creator) = setup();
+        let helm_in = 10 * ONE;
 
         let id = pad
-            .launch(&creator, "Token", "TKN", 100 * 10u128.pow(18), &mut wallets, 0)
+            .launch(&creator, "Token", "TKN", 100 * ONE, &mut wallets, 0)
             .unwrap();
 
         let (buyer, _) = Address::generate();
         wallets.deposit(&buyer, TokenAmount::from_tokens(1000), "fund").unwrap();
-        pad.buy(&buyer, &id, 10 * 10u128.pow(18), &mut wallets, 0).unwrap();
+        pad.buy(&buyer, &id, helm_in, &mut wallets, 0).unwrap();
 
         let pool = pad.get_pool(&id).unwrap();
-        assert!(pool.total_volume > 0);
-        assert!(pool.total_fees > 0);
+        // Volume should be exactly helm_in
+        assert_eq!(pool.total_volume, helm_in, "volume should equal total HELM input");
+        // Fees should be exactly 0.3% of helm_in
+        let expected_fees = proportional(helm_in, DEFAULT_SWAP_FEE_BP as u128, BASIS_POINTS);
+        assert_eq!(pool.total_fees, expected_fees, "fees should be exactly 0.3% of HELM input");
     }
 
     #[test]
@@ -737,16 +801,30 @@ mod tests {
     }
 
     #[test]
-    fn pool_invariant() {
+    fn pool_invariant_preserved_through_swaps() {
         let (mut pad, mut wallets, creator) = setup();
 
         let id = pad
-            .launch(&creator, "Token", "TKN", 100 * 10u128.pow(18), &mut wallets, 0)
+            .launch(&creator, "Token", "TKN", 100 * ONE, &mut wallets, 0)
             .unwrap();
 
-        let pool = pad.get_pool(&id).unwrap();
-        let k_before = pool.invariant();
-        assert!(k_before > 0);
+        let k_after_launch = pad.get_pool(&id).unwrap().invariant();
+        assert!(k_after_launch > 0, "k should be positive after launch");
+
+        // Buy: k should grow (fees add to reserves)
+        let (buyer, _) = Address::generate();
+        wallets.deposit(&buyer, TokenAmount::from_tokens(1000), "fund").unwrap();
+        pad.buy(&buyer, &id, 10 * ONE, &mut wallets, 0).unwrap();
+
+        let k_after_buy = pad.get_pool(&id).unwrap().invariant();
+        assert!(k_after_buy >= k_after_launch, "k must not decrease after buy (fees increase it)");
+
+        // Sell: k should still grow
+        let tokens = pad.get_token(&id).unwrap().balance_of(&buyer);
+        pad.sell(&buyer, &id, tokens / 2, &mut wallets).unwrap();
+
+        let k_after_sell = pad.get_pool(&id).unwrap().invariant();
+        assert!(k_after_sell >= k_after_buy, "k must not decrease after sell (fees increase it)");
     }
 
     #[test]
@@ -783,9 +861,9 @@ mod tests {
     }
 
     #[test]
-    fn default_config() {
+    fn default_config_uses_constants() {
         let pad = Launchpad::new();
-        assert_eq!(pad.default_creator_fee_bp, 40);
-        assert_eq!(pad.default_initial_supply, 1_000_000_000);
+        assert_eq!(pad.default_creator_fee_bp, DEFAULT_CREATOR_FEE_BP);
+        assert_eq!(pad.default_initial_supply, DEFAULT_INITIAL_SUPPLY);
     }
 }
