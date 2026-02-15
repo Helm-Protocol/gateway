@@ -118,12 +118,18 @@ async fn cmd_run(
         helm_governance::GovernancePlugin::with_defaults(),
     ));
 
+    // Womb plugin (agent birth pipeline — Existence Stake + Socratic gestation)
+    runtime.register_plugin(Box::new(
+        helm_agent::WombPlugin::with_defaults(),
+    ));
+
     banner::print_section("Plugins");
     banner::print_module_status("helm-store", "KV + sync", true);
     banner::print_module_status("helm-agent", "agents + Socratic Claw", true);
     banner::print_module_status("helm-token", "token economics", true);
     banner::print_module_status("helm-identity", "DID + Identity Bonds + Reputation", true);
     banner::print_module_status("helm-governance", "proposals + voting", true);
+    banner::print_module_status("helm-womb", "agent birth + Existence Stake", true);
     println!();
 
     runtime.run().await

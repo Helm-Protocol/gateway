@@ -100,6 +100,19 @@ impl IdentityPlugin {
         match result {
             Ok(_) => {
                 tracing::info!(agent = %agent_id, did = %did, "identity auto-registered via plugin");
+
+                // Persist identity entry to KvStore via StorePlugin
+                if let Ok(entry) = self.spanner.resolve(&did) {
+                    if let Ok(serialized) = serde_json::to_vec(entry) {
+                        let key = format!("identity:{}", did);
+                        ctx.emit(PluginEvent::StoreRequest {
+                            key: key.into_bytes(),
+                            value: serialized,
+                            source: PLUGIN_NAME.to_string(),
+                        });
+                    }
+                }
+
                 // Emit confirmation event
                 ctx.emit(PluginEvent::Custom {
                     source_plugin: PLUGIN_NAME.to_string(),
@@ -274,10 +287,11 @@ mod tests {
         let entry = plugin.spanner().resolve_by_agent("agent-1").unwrap();
         assert!(entry.has_capability("compute"));
 
-        // Should have emitted a confirmation event
+        // Should have emitted: StoreRequest (persist) + Custom (confirmation)
         let events = ctx.drain_events();
-        assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], PluginEvent::Custom { .. }));
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], PluginEvent::StoreRequest { .. }));
+        assert!(matches!(events[1], PluginEvent::Custom { .. }));
     }
 
     #[tokio::test]
@@ -487,6 +501,33 @@ mod tests {
         plugin.on_event(&mut ctx, &born).await.unwrap();
         // Still only 1 agent
         assert_eq!(plugin.spanner().active_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn plugin_persists_identity_to_store() {
+        let mut plugin = make_plugin();
+        let mut ctx = make_ctx();
+
+        let born = PluginEvent::AgentBorn {
+            agent_id: "agent-persist".to_string(),
+            capability: "storage".to_string(),
+        };
+        plugin.on_event(&mut ctx, &born).await.unwrap();
+
+        let events = ctx.drain_events();
+        // First event should be StoreRequest with serialized identity
+        let store_req = &events[0];
+        if let PluginEvent::StoreRequest { key, value, source } = store_req {
+            assert_eq!(source, PLUGIN_NAME);
+            let key_str = String::from_utf8_lossy(key);
+            assert!(key_str.starts_with("identity:did:helm:"));
+            // Value should deserialize back to SpannerEntry
+            let entry: crate::spanner::SpannerEntry = serde_json::from_slice(value).unwrap();
+            assert_eq!(entry.agent_id, "agent-persist");
+            assert!(entry.bond.is_active());
+        } else {
+            panic!("expected StoreRequest, got {:?}", store_req);
+        }
     }
 
     #[test]

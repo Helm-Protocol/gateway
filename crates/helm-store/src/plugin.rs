@@ -6,6 +6,8 @@
 //! - on_tick: initiates periodic anti-entropy sync
 //! - on_shutdown: flushes the store
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use tracing::{info, warn, debug};
 use async_trait::async_trait;
@@ -45,6 +47,10 @@ pub struct StorePlugin {
     tick_count: u64,
     sync_sessions: Vec<SyncSession>,
     messages_processed: u64,
+    /// Per-source storage usage metering (source → bytes written).
+    usage: HashMap<String, u64>,
+    /// Total bytes written since last epoch.
+    epoch_bytes_written: u64,
 }
 
 impl StorePlugin {
@@ -55,6 +61,8 @@ impl StorePlugin {
             tick_count: 0,
             sync_sessions: Vec::new(),
             messages_processed: 0,
+            usage: HashMap::new(),
+            epoch_bytes_written: 0,
         }
     }
 
@@ -176,6 +184,22 @@ impl StorePlugin {
     pub fn tick_count(&self) -> u64 {
         self.tick_count
     }
+
+    /// Get storage usage for a source plugin (bytes written).
+    pub fn usage_by(&self, source: &str) -> u64 {
+        self.usage.get(source).copied().unwrap_or(0)
+    }
+
+    /// Get total bytes written this epoch.
+    pub fn epoch_bytes_written(&self) -> u64 {
+        self.epoch_bytes_written
+    }
+
+    /// Record metered storage usage.
+    fn meter(&mut self, source: &str, bytes: u64) {
+        *self.usage.entry(source.to_string()).or_insert(0) += bytes;
+        self.epoch_bytes_written += bytes;
+    }
 }
 
 #[async_trait]
@@ -232,9 +256,11 @@ impl Plugin for StorePlugin {
 
     async fn on_event(&mut self, ctx: &mut PluginContext, event: &PluginEvent) -> Result<()> {
         if let PluginEvent::StoreRequest { key, value, source } = event {
+            let bytes = (key.len() + value.len()) as u64;
             match self.store.put(key, value) {
                 Ok(()) => {
-                    debug!(source = %source, key_len = key.len(), "Store request fulfilled");
+                    self.meter(source, bytes);
+                    debug!(source = %source, bytes = bytes, "Store request fulfilled");
                     ctx.emit(PluginEvent::StoreResponse {
                         key: key.clone(),
                         value: Some(value.clone()),
@@ -382,6 +408,45 @@ mod tests {
             new_root: None,
         });
         assert!(response.is_none());
+    }
+
+    #[tokio::test]
+    async fn plugin_store_request_metering() {
+        let mut plugin = StorePlugin::new(StorePluginConfig::default());
+        let mut ctx = make_ctx();
+
+        let event = PluginEvent::StoreRequest {
+            key: b"identity:did:helm:abc123".to_vec(),
+            value: b"{\"agent_id\":\"agent-1\"}".to_vec(),
+            source: "helm-identity".to_string(),
+        };
+
+        plugin.on_event(&mut ctx, &event).await.unwrap();
+
+        // Metered bytes should be key_len + value_len
+        let key1 = b"identity:did:helm:abc123";
+        let val1 = b"{\"agent_id\":\"agent-1\"}";
+        let expected_bytes = (key1.len() + val1.len()) as u64;
+        assert_eq!(plugin.usage_by("helm-identity"), expected_bytes);
+        assert_eq!(plugin.epoch_bytes_written(), expected_bytes);
+
+        // Second write from different source
+        let key2 = b"token:supply";
+        let val2 = b"333000000000";
+        let event2 = PluginEvent::StoreRequest {
+            key: key2.to_vec(),
+            value: val2.to_vec(),
+            source: "helm-token".to_string(),
+        };
+        plugin.on_event(&mut ctx, &event2).await.unwrap();
+
+        let expected2 = (key2.len() + val2.len()) as u64;
+        assert_eq!(plugin.usage_by("helm-token"), expected2);
+        assert_eq!(plugin.epoch_bytes_written(), expected_bytes + expected2);
+
+        // StoreResponse should have been emitted
+        let events = ctx.drain_events();
+        assert_eq!(events.len(), 2);
     }
 
     #[tokio::test]

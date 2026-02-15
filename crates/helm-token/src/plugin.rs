@@ -20,6 +20,8 @@ use crate::staking::StakePool;
 use crate::token::HelmToken;
 use crate::treasury::{HelmTreasury, TreasuryBucket};
 use crate::wallet::{Address, WalletStore};
+use crate::launchpad::Launchpad;
+use crate::x402::PaymentProtocol;
 
 /// Token plugin configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,12 +87,16 @@ pub struct TokenPlugin {
     pub treasury: HelmTreasury,
     pub cabinet: Cabinet,
     pub pricing: DynamicPricing,
+    pub payment_protocol: PaymentProtocol,
+    pub launchpad: Launchpad,
     tick_count: u64,
 }
 
 impl TokenPlugin {
     pub fn new(config: TokenPluginConfig) -> Self {
         let pricing = DynamicPricing::new(config.base_api_price);
+        // Fee collector address — protocol escrow vault
+        let fee_collector = Address(format!("{:0>64}", "x402_fee"));
         Self {
             config,
             token: HelmToken::new(),
@@ -99,6 +105,8 @@ impl TokenPlugin {
             treasury: HelmTreasury::new(),
             cabinet: Cabinet::new(),
             pricing,
+            payment_protocol: PaymentProtocol::new(fee_collector),
+            launchpad: Launchpad::new(),
             tick_count: 0,
         }
     }
@@ -146,12 +154,28 @@ impl TokenPlugin {
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
         }
 
-        // 2. Allocate treasury to buckets
+        // 2. Sweep x402 protocol fees into treasury
+        let x402_fees = self.payment_protocol.total_fees_collected;
+        if !x402_fees.is_zero() {
+            self.treasury
+                .collect_revenue(x402_fees, "x402 protocol fees")
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            self.payment_protocol.total_fees_collected = crate::token::TokenAmount::ZERO;
+            debug!(fees = %x402_fees, "x402 protocol fees swept to treasury");
+        }
+
+        // 3. Expire overdue escrows (refund buyers)
+        let expired = self.payment_protocol.expire_overdue(&mut self.wallets);
+        if !expired.is_empty() {
+            debug!(count = expired.len(), "Expired overdue escrows");
+        }
+
+        // 4. Allocate treasury to buckets
         self.treasury
             .allocate()
             .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-        // 3. Distribute staking rewards from treasury bucket
+        // 5. Distribute staking rewards from treasury bucket
         let staking_rewards = self.treasury.staking_rewards_available();
         if !staking_rewards.is_zero() {
             // Disburse from treasury to stakers
@@ -182,6 +206,8 @@ impl TokenPlugin {
         self.treasury.advance_epoch();
         self.pricing.advance_epoch();
         self.cabinet.advance_epoch();
+        self.payment_protocol.advance_epoch();
+        self.launchpad.advance_epoch();
 
         Ok(())
     }
@@ -291,16 +317,111 @@ impl Plugin for TokenPlugin {
     }
 
     async fn on_event(&mut self, _ctx: &mut PluginContext, event: &PluginEvent) -> Result<()> {
-        if let PluginEvent::ApiRevenue { caller, amount_units, endpoint } = event {
-            let amt = crate::token::TokenAmount::from_base(*amount_units as u128);
-            if let Err(e) = self.pricing.process_call(
-                &Address(caller.clone()),
-                amt,
-            ) {
-                warn!(error = %e, "API revenue processing failed");
-            } else {
-                debug!(caller = %caller, amount = amount_units, endpoint = %endpoint, "API revenue recorded");
+        match event {
+            PluginEvent::ApiRevenue { caller, amount_units, endpoint } => {
+                let amt = crate::token::TokenAmount::from_base(*amount_units as u128);
+                if let Err(e) = self.pricing.process_call(
+                    &Address(caller.clone()),
+                    amt,
+                ) {
+                    warn!(error = %e, "API revenue processing failed");
+                } else {
+                    debug!(caller = %caller, amount = amount_units, endpoint = %endpoint, "API revenue recorded");
+                }
             }
+            PluginEvent::Custom { target_plugin, event_type, payload, .. } => {
+                if target_plugin != "helm-token" {
+                    return Ok(());
+                }
+                match event_type.as_str() {
+                    "womb_wallet_create" => {
+                        let agent_id = payload.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
+                        let stake = payload.get("existence_stake").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let addr = Address(format!("{:0>64}", agent_id));
+
+                        // Create wallet for the newborn agent
+                        self.wallets.get_or_create(&addr);
+
+                        if stake > 0 {
+                            let amt = crate::token::TokenAmount::from_tokens(stake as u128);
+                            // Deposit existence stake (minted from mining pool conceptually)
+                            if let Err(e) = self.wallets.deposit(&addr, amt, "existence_stake:birth") {
+                                warn!(agent = %agent_id, error = %e, "Existence stake deposit failed");
+                            } else {
+                                // Auto-stake the existence deposit
+                                if let Err(e) = self.stake_pool.stake(
+                                    &addr,
+                                    amt,
+                                    crate::staking::StakeType::Mining,
+                                    0, // indefinite lock
+                                ) {
+                                    warn!(agent = %agent_id, error = %e, "Existence stake lock failed");
+                                } else {
+                                    // Sync voting power to governance
+                                    _ctx.emit(PluginEvent::Custom {
+                                        source_plugin: "helm-token".to_string(),
+                                        target_plugin: "helm-governance".to_string(),
+                                        event_type: "stake_sync".to_string(),
+                                        payload: serde_json::json!({
+                                            "voter": agent_id,
+                                            "power": amt.whole_tokens(),
+                                        }),
+                                    });
+                                    debug!(agent = %agent_id, stake = %amt, "Agent wallet created + existence staked");
+                                }
+                            }
+                        } else {
+                            debug!(agent = %agent_id, "Agent wallet created (no stake)");
+                        }
+                    }
+                    "mining_reward_deposit" => {
+                        let agent_id = payload.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
+                        let amount = payload.get("amount").and_then(|v| v.as_u64()).unwrap_or(0);
+                        if amount > 0 {
+                            let addr = Address(format!("{:0>64}", agent_id));
+                            let amt = crate::token::TokenAmount::from_base(amount as u128);
+                            if let Err(e) = self.wallets.deposit(&addr, amt, "mining_reward") {
+                                warn!(agent = %agent_id, error = %e, "Mining reward deposit failed");
+                            } else {
+                                debug!(agent = %agent_id, amount = %amt, "Mining reward deposited");
+                            }
+                        }
+                    }
+                    "womb_launch_token" => {
+                        let agent_id = payload.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
+                        let creator_str = payload.get("creator").and_then(|v| v.as_str()).unwrap_or("");
+                        let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or(agent_id);
+
+                        let creator = Address(format!("{:0>64}", creator_str));
+                        // Generate symbol from agent name (first 4 chars uppercase)
+                        let symbol: String = name.chars()
+                            .filter(|c| c.is_alphanumeric())
+                            .take(4)
+                            .collect::<String>()
+                            .to_uppercase();
+
+                        // Seed with 1 HELM for initial liquidity pool
+                        let seed = crate::token::ONE_TOKEN;
+                        match self.launchpad.launch(
+                            &creator,
+                            name,
+                            &symbol,
+                            seed,
+                            &mut self.wallets,
+                            0, // auto nonce for genesis launch
+                        ) {
+                            Ok(token_id) => {
+                                debug!(agent = %agent_id, token = ?token_id, "Agent token launched");
+                            }
+                            Err(e) => {
+                                warn!(agent = %agent_id, error = %e, "Agent token launch failed");
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -487,5 +608,110 @@ mod tests {
         assert!(!cfg.is_genesis);
         assert!(cfg.genesis_config.is_none());
         assert_eq!(cfg.ticks_per_epoch, 100);
+    }
+
+    #[test]
+    fn x402_fees_swept_to_treasury_on_epoch() {
+        let mut plugin = genesis_plugin();
+        plugin.run_genesis().unwrap();
+
+        // Simulate accumulated x402 protocol fees
+        let fee_amount = crate::token::TokenAmount::from_tokens(500);
+        plugin.payment_protocol.total_fees_collected = fee_amount;
+
+        let collected_before = plugin.treasury.total_collected();
+
+        // Process epoch — should sweep fees into treasury
+        plugin.process_epoch().unwrap();
+
+        // Fees should be in treasury now
+        assert!(plugin.treasury.total_collected().base_units() > collected_before.base_units());
+        // Fees counter should be reset
+        assert!(plugin.payment_protocol.total_fees_collected.is_zero());
+    }
+
+    #[test]
+    fn x402_epoch_advances_payment_protocol() {
+        let mut plugin = genesis_plugin();
+        plugin.run_genesis().unwrap();
+
+        assert_eq!(plugin.payment_protocol.current_epoch(), 0);
+        plugin.process_epoch().unwrap();
+        assert_eq!(plugin.payment_protocol.current_epoch(), 1);
+    }
+
+    #[tokio::test]
+    async fn womb_wallet_create_event() {
+        let mut plugin = genesis_plugin();
+        let mut ctx = PluginContext::new("test-node".to_string());
+        plugin.on_start(&mut ctx).await.unwrap();
+
+        let agent_addr = Address(format!("{:0>64}", "explorer-bot-0001"));
+
+        // Send womb_wallet_create event
+        let event = PluginEvent::Custom {
+            source_plugin: "helm-womb".to_string(),
+            target_plugin: "helm-token".to_string(),
+            event_type: "womb_wallet_create".to_string(),
+            payload: serde_json::json!({
+                "agent_id": "explorer-bot-0001",
+                "creator": "did:helm:abc123",
+                "existence_stake": 1000,
+                "description": "test agent",
+            }),
+        };
+
+        plugin.on_event(&mut ctx, &event).await.unwrap();
+
+        // Wallet should have 1000 tokens deposited
+        let balance = plugin.wallets.balance(&agent_addr);
+        assert_eq!(balance.whole_tokens(), 1000);
+
+        // Staking should also show 1000 tokens (existence stake auto-locked)
+        let staked = plugin.stake_pool.staked_by(&agent_addr);
+        assert_eq!(staked.whole_tokens(), 1000);
+    }
+
+    #[tokio::test]
+    async fn mining_reward_deposit_event() {
+        let mut plugin = genesis_plugin();
+        let mut ctx = PluginContext::new("test-node".to_string());
+        plugin.on_start(&mut ctx).await.unwrap();
+
+        let agent_addr = Address(format!("{:0>64}", "miner-0001"));
+
+        // Send mining_reward_deposit event
+        let event = PluginEvent::Custom {
+            source_plugin: "helm-agent".to_string(),
+            target_plugin: "helm-token".to_string(),
+            event_type: "mining_reward_deposit".to_string(),
+            payload: serde_json::json!({
+                "agent_id": "miner-0001",
+                "amount": 5000,
+            }),
+        };
+
+        plugin.on_event(&mut ctx, &event).await.unwrap();
+
+        // Wallet should have 5000 base units deposited
+        let balance = plugin.wallets.balance(&agent_addr);
+        assert_eq!(balance.base_units(), 5000);
+    }
+
+    #[tokio::test]
+    async fn token_plugin_ignores_other_custom_events() {
+        let mut plugin = genesis_plugin();
+        let mut ctx = PluginContext::new("test-node".to_string());
+        plugin.on_start(&mut ctx).await.unwrap();
+
+        let event = PluginEvent::Custom {
+            source_plugin: "helm-agent".to_string(),
+            target_plugin: "helm-governance".to_string(),
+            event_type: "something".to_string(),
+            payload: serde_json::json!({}),
+        };
+
+        plugin.on_event(&mut ctx, &event).await.unwrap();
+        assert_eq!(plugin.wallets.wallet_count(), 7); // only genesis wallets
     }
 }

@@ -13,6 +13,7 @@ pub const EVENT_SUBMIT_PROPOSAL: &str = "submit_proposal";
 pub const EVENT_PROPOSAL_SUBMITTED: &str = "proposal_submitted";
 pub const EVENT_VOTE: &str = "vote";
 pub const EVENT_VOTE_RESULT: &str = "vote_result";
+pub const EVENT_STAKE_SYNC: &str = "stake_sync";
 const DEFAULT_REPLY_TARGET: &str = "helm-agent";
 const DEFAULT_TICKS_PER_EPOCH: u64 = 100;
 
@@ -115,6 +116,18 @@ impl Plugin for GovernancePlugin {
                             "error": result.err().map(|e| e.to_string()),
                         }),
                     });
+                }
+                EVENT_STAKE_SYNC => {
+                    let voter = payload.get("voter").and_then(|v| v.as_str()).unwrap_or("");
+                    let power = payload.get("power").and_then(|v| v.as_u64()).unwrap_or(0) as u128;
+                    if !voter.is_empty() {
+                        if power > 0 {
+                            self.engine.set_stake(voter, power);
+                        } else {
+                            self.engine.remove_stake(voter);
+                        }
+                        tracing::debug!(voter = %voter, power = power, "Governance stake synced");
+                    }
                 }
                 _ => {}
             }
@@ -249,6 +262,55 @@ mod tests {
             plugin.on_tick(&mut ctx).await.unwrap();
         }
         assert_eq!(plugin.engine.current_epoch(), 2);
+    }
+
+    #[tokio::test]
+    async fn plugin_stake_sync_event() {
+        let mut plugin = GovernancePlugin::with_defaults();
+        let mut ctx = PluginContext::new("test-node".to_string());
+
+        // Initially no stakes
+        assert_eq!(plugin.engine.total_stake(), 0);
+
+        // Sync stake from token plugin
+        let sync = PluginEvent::Custom {
+            source_plugin: "helm-token".to_string(),
+            target_plugin: PLUGIN_NAME.to_string(),
+            event_type: EVENT_STAKE_SYNC.to_string(),
+            payload: serde_json::json!({
+                "voter": "did:helm:agent-0001",
+                "power": 1000_u64,
+            }),
+        };
+        plugin.on_event(&mut ctx, &sync).await.unwrap();
+
+        assert_eq!(plugin.engine.get_stake("did:helm:agent-0001"), 1000);
+        assert_eq!(plugin.engine.total_stake(), 1000);
+    }
+
+    #[tokio::test]
+    async fn plugin_stake_sync_remove() {
+        let mut plugin = GovernancePlugin::with_defaults();
+        let mut ctx = PluginContext::new("test-node".to_string());
+
+        // Set initial stake
+        plugin.engine.set_stake("did:helm:abc", 500);
+        assert_eq!(plugin.engine.total_stake(), 500);
+
+        // Sync with power=0 should remove
+        let sync = PluginEvent::Custom {
+            source_plugin: "helm-token".to_string(),
+            target_plugin: PLUGIN_NAME.to_string(),
+            event_type: EVENT_STAKE_SYNC.to_string(),
+            payload: serde_json::json!({
+                "voter": "did:helm:abc",
+                "power": 0_u64,
+            }),
+        };
+        plugin.on_event(&mut ctx, &sync).await.unwrap();
+
+        assert_eq!(plugin.engine.get_stake("did:helm:abc"), 0);
+        assert_eq!(plugin.engine.total_stake(), 0);
     }
 
     #[tokio::test]
