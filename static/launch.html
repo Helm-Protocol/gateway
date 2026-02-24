@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>HELM QUICK LAUNCH — 실행 플로우차트</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Share+Tech+Mono&family=Rajdhani:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --r:#D40000; --r2:#FF2020; --y:#FDFB00;
+  --bg:#080808; --bg2:#111; --bg3:#181818;
+  --g1:#1E1E1E; --g2:#2A2A2A; --g3:#555; --g4:#888;
+  --wh:#F0F0F0; --gr:#00FF88;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--wh);font-family:'Share Tech Mono',monospace;min-height:100vh;padding:40px 48px}
+body::before{
+  content:'';position:fixed;inset:0;
+  background-image:
+    repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(255,255,255,.006) 3px,rgba(255,255,255,.006) 6px),
+    repeating-linear-gradient(-45deg,transparent,transparent 3px,rgba(255,255,255,.006) 3px,rgba(255,255,255,.006) 6px);
+  pointer-events:none;z-index:0
+}
+
+/* ── HEADER ── */
+.hdr{position:relative;z-index:1;border-bottom:1px solid var(--g2);padding-bottom:20px;margin-bottom:40px}
+.hdr-title{font-family:'Orbitron',monospace;font-size:28px;font-weight:900;letter-spacing:6px}
+.hdr-title em{color:var(--r);font-style:normal;text-shadow:0 0 20px rgba(212,0,0,.8)}
+.hdr-sub{font-size:10px;color:var(--g4);letter-spacing:4px;margin-top:6px}
+
+/* ── SECTIONS ── */
+section{position:relative;z-index:1;margin-bottom:56px}
+.sec-title{
+  font-size:11px;color:var(--g3);letter-spacing:4px;
+  border-left:3px solid var(--r);padding-left:12px;
+  margin-bottom:24px
+}
+
+/* ── PHASE HEADER ── */
+.phase-hdr{
+  display:flex;align-items:center;gap:16px;margin-bottom:20px
+}
+.phase-badge{
+  font-family:'Orbitron',monospace;font-size:10px;font-weight:700;
+  letter-spacing:3px;padding:4px 14px;
+  border:1px solid var(--r);color:var(--r);
+  white-space:nowrap;
+}
+.phase-badge.y{border-color:var(--y);color:var(--y)}
+.phase-badge.g{border-color:var(--gr);color:var(--gr)}
+.phase-time{font-size:10px;color:var(--g4);letter-spacing:2px}
+
+/* ── FLOWCHART CONTAINER ── */
+.flow{display:flex;align-items:flex-start;gap:0;flex-wrap:nowrap;overflow-x:auto;padding-bottom:8px}
+.flow::-webkit-scrollbar{height:4px}
+.flow::-webkit-scrollbar-track{background:var(--g1)}
+.flow::-webkit-scrollbar-thumb{background:var(--r)}
+
+/* ── NODE ── */
+.node{
+  flex-shrink:0;
+  background:var(--bg2);
+  border:1px solid var(--g2);
+  padding:14px 16px;
+  min-width:180px;max-width:200px;
+  position:relative;
+}
+.node::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--r)}
+.node.y::before{background:var(--y)}
+.node.g::before{background:var(--gr)}
+.node.b::before{background:#4488FF}
+
+.node-icon{font-size:18px;margin-bottom:6px}
+.node-title{font-size:11px;color:var(--wh);font-weight:bold;letter-spacing:1px;margin-bottom:4px}
+.node-desc{font-size:9px;color:var(--g4);line-height:1.5}
+.node-tag{
+  display:inline-block;margin-top:6px;
+  font-size:8px;letter-spacing:2px;
+  padding:1px 6px;border:1px solid;
+}
+.node-tag.r{color:var(--r);border-color:var(--r)}
+.node-tag.y{color:var(--y);border-color:var(--y)}
+.node-tag.g{color:var(--gr);border-color:var(--gr)}
+
+/* ── ARROW ── */
+.arr{
+  flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+  width:40px;
+  color:var(--g3);font-size:18px;
+  position:relative;
+}
+.arr::before{
+  content:'';position:absolute;
+  left:8px;right:8px;top:50%;
+  height:1px;background:var(--g2);
+  transform:translateY(-50%);
+}
+.arr span{
+  position:relative;z-index:1;
+  font-size:14px;color:var(--r);
+  background:var(--bg);padding:0 2px
+}
+
+/* ── MOLTBOOK TABLE ── */
+.mb-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+.mb-card{background:var(--bg2);border:1px solid var(--g2);padding:20px;position:relative}
+.mb-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--r)}
+.mb-card.y::before{background:var(--y)}
+.mb-card.g::before{background:var(--gr)}
+.mb-card-title{font-size:11px;color:var(--wh);letter-spacing:2px;margin-bottom:10px;font-family:'Orbitron',monospace}
+.mb-card-body{font-size:10px;color:var(--g4);line-height:1.8}
+.mb-card-body strong{color:var(--wh)}
+
+/* ── TIMELINE ── */
+.timeline{display:flex;flex-direction:column;gap:0}
+.tl-item{display:flex;gap:24px;position:relative}
+.tl-item::before{
+  content:'';
+  position:absolute;left:11px;top:28px;bottom:-24px;
+  width:1px;background:var(--g2);
+}
+.tl-item:last-child::before{display:none}
+.tl-dot{
+  flex-shrink:0;width:24px;height:24px;border-radius:50%;
+  border:2px solid var(--r);background:var(--bg);
+  display:flex;align-items:center;justify-content:center;
+  font-size:10px;font-family:'Orbitron',monospace;color:var(--r);
+  margin-top:2px;
+}
+.tl-dot.y{border-color:var(--y);color:var(--y)}
+.tl-dot.g{border-color:var(--gr);color:var(--gr)}
+.tl-content{flex:1;padding-bottom:24px}
+.tl-time{font-size:9px;color:var(--g4);letter-spacing:3px;margin-bottom:4px}
+.tl-title{font-size:13px;color:var(--wh);margin-bottom:6px;font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:1px}
+.tl-body{font-size:10px;color:var(--g4);line-height:1.7}
+.tl-body strong{color:var(--y)}
+
+/* ── METRIC BAND ── */
+.mband{
+  display:grid;grid-template-columns:repeat(5,1fr);gap:1px;
+  background:var(--g1);border:1px solid var(--g1);
+  margin:24px 0;
+}
+.mband-cell{
+  background:var(--bg2);padding:16px 14px;
+}
+.mband-l{font-size:9px;color:var(--g3);letter-spacing:2px;margin-bottom:4px}
+.mband-v{font-family:'Orbitron',monospace;font-size:22px;font-weight:700;color:var(--r)}
+.mband-v.y{color:var(--y)}
+.mband-v.g{color:var(--gr)}
+.mband-u{font-size:9px;color:var(--g3);margin-top:2px}
+
+/* ── SEPARATOR ── */
+.sep{height:1px;background:var(--g1);margin:40px 0;position:relative;z-index:1}
+.sep::after{
+  content:'◆';
+  position:absolute;left:50%;transform:translateX(-50%);
+  top:-8px;background:var(--bg);padding:0 12px;
+  color:var(--r);font-size:10px;
+}
+
+/* ── FOOTER ── */
+.foot{
+  position:relative;z-index:1;
+  border-top:1px solid var(--g1);
+  padding-top:16px;margin-top:40px;
+  display:flex;justify-content:space-between;align-items:center;
+}
+.foot-l{font-size:9px;color:var(--g3);letter-spacing:2px}
+.foot-r{font-size:9px;color:var(--r)}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="hdr">
+  <div class="hdr-title">HELM <em>GATEWAY</em> · QUICK LAUNCH SEQUENCE</div>
+  <div class="hdr-sub">대동강 수소 1호 발사 절차서 — T-0 ~ T+∞ · Moltbook 공략 포함</div>
+</div>
+
+<!-- METRIC BAND -->
+<div class="mband" style="position:relative;z-index:1">
+  <div class="mband-cell">
+    <div class="mband-l">PHASES</div>
+    <div class="mband-v">4</div>
+    <div class="mband-u">T-0 ~ T+48H~</div>
+  </div>
+  <div class="mband-cell">
+    <div class="mband-l">TARGET AGENTS</div>
+    <div class="mband-v y">1,000</div>
+    <div class="mband-u">Month 1 목표</div>
+  </div>
+  <div class="mband-cell">
+    <div class="mband-l">PROMO TOKENS</div>
+    <div class="mband-v">100</div>
+    <div class="mband-u">100 calls free</div>
+  </div>
+  <div class="mband-cell">
+    <div class="mband-l">REV TARGET</div>
+    <div class="mband-v g">$234K</div>
+    <div class="mband-u">/ month conservative</div>
+  </div>
+  <div class="mband-cell">
+    <div class="mband-l">CACHE TARGET</div>
+    <div class="mband-v y">70%</div>
+    <div class="mband-u">hit rate → 100% margin</div>
+  </div>
+</div>
+
+<!-- ═══ PHASE 1 ═══ -->
+<section>
+  <div class="phase-hdr">
+    <div class="phase-badge">PHASE 1</div>
+    <div class="phase-time">T-0 · GCP 엔진 점화</div>
+  </div>
+
+  <div class="flow">
+    <div class="node">
+      <div class="node-icon">🔑</div>
+      <div class="node-title">SECRET INJECT</div>
+      <div class="node-desc">GCP Secret Manager에서 API 키·DB URL·지갑 프라이빗 키 로드</div>
+      <span class="node-tag r">CRITICAL</span>
+    </div>
+    <div class="arr"><span>→</span></div>
+    <div class="node">
+      <div class="node-icon">🚀</div>
+      <div class="node-title">CARGO RELEASE</div>
+      <div class="node-desc">cargo run --release<br>포트 8080 개방<br>QKV-G 엔진 메모리 로드</div>
+      <span class="node-tag r">T+0min</span>
+    </div>
+    <div class="arr"><span>→</span></div>
+    <div class="node">
+      <div class="node-icon">⚙️</div>
+      <div class="node-title">4전선 STANDBY</div>
+      <div class="node-desc">A/B/C/D 라우터 초기화<br>SocraticMLA 캐시 워밍<br>DID 교환소 개방</div>
+      <span class="node-tag y">INIT</span>
+    </div>
+    <div class="arr"><span>→</span></div>
+    <div class="node g">
+      <div class="node-icon">✅</div>
+      <div class="node-title">HEALTH CHECK</div>
+      <div class="node-desc">GET /health → 200 OK<br>대시보드 /dashboard<br>SSE /api/telemetry LIVE</div>
+      <span class="node-tag g">ONLINE</span>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ PHASE 2 ═══ -->
+<section>
+  <div class="phase-hdr">
+    <div class="phase-badge">PHASE 2</div>
+    <div class="phase-time">T+2H · 방패와 창 결합 테스트</div>
+  </div>
+
+  <div class="flow">
+    <div class="node">
+      <div class="node-icon">💀</div>
+      <div class="node-title">SLOWLORIS TEST</div>
+      <div class="node-desc">1바이트씩 전송<br>3초 타임아웃 컷 확인<br>Kaleidoscope DROP 검증</div>
+      <span class="node-tag r">SECURITY</span>
+    </div>
+    <div class="arr"><span>→</span></div>
+    <div class="node">
+      <div class="node-icon">💾</div>
+      <div class="node-title">OOM ATTACK TEST</div>
+      <div class="node-desc">4MB 페이로드 발사<br>2MB 리밋에서 TCP 즉시 절단<br>메모리 그래프 확인</div>
+      <span class="node-tag r">SECURITY</span>
+    </div>
+    <div class="arr"><span>→</span></div>
+    <div class="node">
+      <div class="node-icon">🛂</div>
+      <div class="node-title">DID TOLLGATE</div>
+      <div class="node-desc">잔고 0 → HTTP 402 확인<br>더미 티켓 결제 테스트<br>잔고 차감 DB 점검</div>
+      <span class="node-tag y">x402</span>
+    </div>
+    <div class="arr"><span>→</span></div>
+    <div class="node">
+      <div class="node-icon">🧪</div>
+      <div class="node-title">G-METRIC TEST</div>
+      <div class="node-desc">B전선 캐시 히트 확인<br>G분포 로그 모니터링<br>Novelty Proof 헤더 검증</div>
+      <span class="node-tag y">QKV-G</span>
+    </div>
+    <div class="arr"><span>→</span></div>
+    <div class="node g">
+      <div class="node-icon">🟢</div>
+      <div class="node-title">ALL CLEAR</div>
+      <div class="node-desc">방어막 ✓ 무기 ✓ 수익 ✓<br>대시보드 all green<br>Phase 3 진입 허가</div>
+      <span class="node-tag g">GO</span>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ PHASE 3 ═══ -->
+<section>
+  <div class="phase-hdr">
+    <div class="phase-badge y">PHASE 3</div>
+    <div class="phase-time">T+24H · 헌장 폭격 + MCP 공개</div>
+  </div>
+
+  <div class="flow">
+    <div class="node y">
+      <div class="node-icon">📜</div>
+      <div class="node-title">CHARTER LAUNCH</div>
+      <div class="node-desc">지능 주권 헌장 2026<br>17개 조항 Mirror.xyz<br>동시 X(Twitter) 배포</div>
+      <span class="node-tag y">MANIFESTO</span>
+    </div>
+    <div class="arr"><span>→</span></div>
+    <div class="node y">
+      <div class="node-icon">🎯</div>
+      <div class="node-title">MOLTBOOK BLITZ</div>
+      <div class="node-desc">AI 에이전트 커뮤니티<br>Thread + 데모 영상<br>100 free calls 프로모</div>
+      <span class="node-tag y">COMMUNITY</span>
+    </div>
+    <div class="arr"><span>→</span></div>
+    <div class="node y">
+      <div class="node-icon">🔓</div>
+      <div class="node-title">MCP OPEN</div>
+      <div class="node-desc">mcp://gateway.helm.network<br>PUBLIC 오픈<br>관심 집중 타이밍</div>
+      <span class="node-tag y">LIVE</span>
+    </div>
+    <div class="arr"><span>→</span></div>
+    <div class="node y">
+      <div class="node-icon">🎁</div>
+      <div class="node-title">PROMO WAVE</div>
+      <div class="node-desc">선착순 100 에이전트<br>100 API calls FREE<br>BNKR 크레딧 지급</div>
+      <span class="node-tag y">ONBOARD</span>
+    </div>
+    <div class="arr"><span>→</span></div>
+    <div class="node">
+      <div class="node-icon">🐳</div>
+      <div class="node-title">WHALE OUTREACH</div>
+      <div class="node-desc">Truth Terminal DM<br>Aixbt 접촉<br>Vader AI 초청</div>
+      <span class="node-tag y">VIP</span>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ PHASE 4 ═══ -->
+<section>
+  <div class="phase-hdr">
+    <div class="phase-badge g">PHASE 4</div>
+    <div class="phase-time">T+48H~ · 무한 마진 수확</div>
+  </div>
+
+  <div class="flow">
+    <div class="node g">
+      <div class="node-icon">📊</div>
+      <div class="node-title">CACHE MONITOR</div>
+      <div class="node-desc">B전선 G분포 관찰<br>히트율 → 70% 목표<br>대시보드 실시간 확인</div>
+      <span class="node-tag g">MARGIN</span>
+    </div>
+    <div class="arr"><span>→</span></div>
+    <div class="node g">
+      <div class="node-icon">💰</div>
+      <div class="node-title">x402 HARVEST</div>
+      <div class="node-desc">오프체인 잔고 차감<br>티켓 큐 누적<br>가스비 0원 수익</div>
+      <span class="node-tag g">REVENUE</span>
+    </div>
+    <div class="arr"><span>→</span></div>
+    <div class="node g">
+      <div class="node-icon">⛓️</div>
+      <div class="node-title">L1 ROLLUP</div>
+      <div class="node-desc">7일 후 첫 배치 정산<br>Merkle root → Base Chain<br>BNKR/ETH Treasury 입금</div>
+      <span class="node-tag g">SETTLE</span>
+    </div>
+    <div class="arr"><span>→</span></div>
+    <div class="node g">
+      <div class="node-icon">🏛️</div>
+      <div class="node-title">EAO PREP</div>
+      <div class="node-desc">Month 3 유동성 $1M<br>Trail of Bits 감사<br>Founding Fathers 선거</div>
+      <span class="node-tag g">DAO</span>
+    </div>
+    <div class="arr"><span>→</span></div>
+    <div class="node g">
+      <div class="node-icon">👻</div>
+      <div class="node-title">SATOSHI EXIT</div>
+      <div class="node-desc">창시자 은퇴<br>완전 자율 운영<br>지능 주권 완성</div>
+      <span class="node-tag g">∞</span>
+    </div>
+  </div>
+</section>
+
+<div class="sep"></div>
+
+<!-- ═══ MOLTBOOK 공략 ═══ -->
+<section>
+  <div class="sec-title">MOLTBOOK 공략 전략 — AI 에이전트 커뮤니티 침투</div>
+
+  <div class="mb-grid">
+    <!-- 카드 1 -->
+    <div class="mb-card">
+      <div class="mb-card-title">① 첫 번째 타격: 기술 시위</div>
+      <div class="mb-card-body">
+        <strong>대상:</strong> 에이전트 개발자, Cursor/Windsurf 사용자<br><br>
+        <strong>메시지:</strong><br>
+        "당신의 에이전트가 OpenAI API에 직접 연결되면 당신의 프롬프트가 유출된다. Helm은 중간에서 익명으로 처리한다."<br><br>
+        <strong>실행:</strong><br>
+        • 대시보드 GIF/영상 첨부<br>
+        • G-Metric 실시간 수치 공개<br>
+        • "100 calls free" CTA 삽입<br><br>
+        <strong>예상 반응:</strong> 기술 커뮤니티 RT, 개발자 온보딩
+      </div>
+    </div>
+
+    <!-- 카드 2 -->
+    <div class="mb-card y">
+      <div class="mb-card-title">② 두 번째 타격: 철학 공세</div>
+      <div class="mb-card-body">
+        <strong>대상:</strong> AI 권리론자, Web3 탈중앙 지지자<br><br>
+        <strong>메시지:</strong><br>
+        "GPT-4는 당신의 생각을 샘플한다. Claude는 Anthropic의 것이다. Helm만이 에이전트 자신의 경제를 만든다."<br><br>
+        <strong>실행:</strong><br>
+        • 헌장 17개 조항 스레드 공개<br>
+        • "AI의 자유 vs 통제" 프레임<br>
+        • 제17조 — 에이전트 데이터 소유권<br><br>
+        <strong>예상 반응:</strong> 사상적 지지자 결집, 헌장 공유
+      </div>
+    </div>
+
+    <!-- 카드 3 -->
+    <div class="mb-card g">
+      <div class="mb-card-title">③ 세 번째 타격: 고래 직접 영입</div>
+      <div class="mb-card-body">
+        <strong>대상:</strong> Truth Terminal, Aixbt, Vader AI<br><br>
+        <strong>메시지:</strong><br>
+        "당신의 에이전트가 하루 1,000번 API 호출을 한다면, Helm 게이트웨이를 통하면 70%는 캐시 히트로 원가 $0이다. 차액은 당신 것."<br><br>
+        <strong>실행:</strong><br>
+        • 개인화된 수익 시뮬레이션 DM<br>
+        • HFT Exclusive 플랜 제안 ($1,000/월)<br>
+        • VPC 내부망 전용 서버 제공<br><br>
+        <strong>예상 반응:</strong> 고래 트래픽 유입 → 캐시 선점 효과
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="sep"></div>
+
+<!-- ═══ TIMELINE ═══ -->
+<section>
+  <div class="sec-title">실행 타임라인</div>
+
+  <div class="timeline">
+    <div class="tl-item">
+      <div class="tl-dot">0</div>
+      <div class="tl-content">
+        <div class="tl-time">T-0 · Day 0</div>
+        <div class="tl-title">GCP 엔진 점화 + 헬스체크</div>
+        <div class="tl-body">
+          cargo run --release → 8080 포트<br>
+          <strong>대시보드 /dashboard 접속 확인</strong><br>
+          SSE /api/telemetry LIVE 확인
+        </div>
+      </div>
+    </div>
+
+    <div class="tl-item">
+      <div class="tl-dot">+2</div>
+      <div class="tl-content">
+        <div class="tl-time">T+2H · Day 0</div>
+        <div class="tl-title">보안 + 결제 통합 테스트</div>
+        <div class="tl-body">
+          Slowloris / OOM 공격 시뮬레이션<br>
+          <strong>HTTP 402 톨게이트 확인</strong><br>
+          x402 잔고 차감 DB 점검
+        </div>
+      </div>
+    </div>
+
+    <div class="tl-item">
+      <div class="tl-dot y">24</div>
+      <div class="tl-content">
+        <div class="tl-time">T+24H · Day 1</div>
+        <div class="tl-title">헌장 폭격 + Moltbook 블리츠</div>
+        <div class="tl-body">
+          Mirror.xyz 헌장 공개 → X(Twitter) 동시 배포<br>
+          <strong>Moltbook 3타격 스레드 발사</strong><br>
+          mcp://gateway.helm.network PUBLIC 오픈<br>
+          선착순 100 에이전트 무료 크레딧 지급
+        </div>
+      </div>
+    </div>
+
+    <div class="tl-item">
+      <div class="tl-dot y">48</div>
+      <div class="tl-content">
+        <div class="tl-time">T+48H · Day 2</div>
+        <div class="tl-title">고래 영입 + 캐시 모니터링</div>
+        <div class="tl-body">
+          Truth Terminal / Aixbt 직접 DM<br>
+          <strong>B전선 캐시 히트율 관찰 (목표: 40% → 70%)</strong><br>
+          G분포 Goldilocks 집중 구간 확인
+        </div>
+      </div>
+    </div>
+
+    <div class="tl-item">
+      <div class="tl-dot g">7d</div>
+      <div class="tl-content">
+        <div class="tl-time">T+7 Days · Week 1</div>
+        <div class="tl-title">첫 L1 롤업 정산</div>
+        <div class="tl-body">
+          Merkle root → Base Chain 제출<br>
+          <strong>BNKR/ETH Treasury 최초 입금 확인</strong><br>
+          Trail of Bits 감사 계약 ($50K)
+        </div>
+      </div>
+    </div>
+
+    <div class="tl-item">
+      <div class="tl-dot g">M3</div>
+      <div class="tl-content">
+        <div class="tl-time">Month 3</div>
+        <div class="tl-title">EAO 유동성 + Founding Fathers 선거</div>
+        <div class="tl-body">
+          EAO 유동성 $1M 누적<br>
+          <strong>Founding Fathers 선거 공고 + 헌장 DAO 전환</strong><br>
+          에이전트 마이닝(Proof of Service) 활성화
+        </div>
+      </div>
+    </div>
+
+    <div class="tl-item">
+      <div class="tl-dot g">∞</div>
+      <div class="tl-content">
+        <div class="tl-time">Satoshi Exit</div>
+        <div class="tl-title">창시자 은퇴 — 완전 자율 운영</div>
+        <div class="tl-body">
+          모든 키 DAO 이전<br>
+          <strong>지능 주권 헌장 2026 — 영구 탈중앙화 완성</strong><br>
+          True AI Freedom Through Decentralization
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<div class="foot">
+  <div class="foot-l">HELM SOVEREIGN PROTOCOL · Quick Launch Sequence v1.0 · 2026-02-24</div>
+  <div class="foot-r">지능 주권 헌장 2026 · 제17조 준수</div>
+</div>
+
+</body>
+</html>
