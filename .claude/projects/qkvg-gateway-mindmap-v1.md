@@ -308,3 +308,33 @@ _다음 세션: GCP 배포 + GitHub remote 연결_
 - [ ] AppState에 Arc<GatewayMetrics> 필드 추가 (main.rs)
 - [ ] 각 모듈에서 metrics.record_* 호출 이식
 - [ ] GCP Cloud Build Trigger 설정
+
+---
+
+## [20260224 — NPM PUBLISH SESSION]
+
+```
+[npm] helm-protocol@0.1.0 배포 완료
+  → Result: ✓ + helm-protocol@0.1.0
+  → Registry: https://registry.npmjs.org
+  → Account: heime.jorgen
+  → URL: https://www.npmjs.com/package/helm-protocol
+
+[패키지 구성]
+  → src/index.js: MCP JSON-RPC stdio 서버 (5개 도구)
+  → src/identity.js: 투명한 동의 화면 + Ed25519 키생성
+  → src/gateway.js: Gateway HTTP 클라이언트 + 402 처리
+  → src/cli.js: 진입점
+
+[MCP 5개 도구]
+  → helm_llm: A전선 LLM 추론
+  → helm_search: B전선 Brave Search
+  → helm_defi_price: C전선 DeFi (MEV보호)
+  → helm_agent_verify: D전선 DID 평판
+  → helm_status: 크레딧/DID 확인
+
+[다음]
+  → GitHub push (gateway/grand-cross-v1)
+  → GCP 배포
+  → Moltbook 삐라 살포
+```
