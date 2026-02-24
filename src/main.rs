@@ -23,6 +23,7 @@ use std::sync::Arc;
 use tracing::info;
 
 mod auth;
+mod synco;
 mod broker;
 mod filter;
 mod mcp;
@@ -177,7 +178,7 @@ async fn filter_news(
 
     for text in texts {
         // 더미 임베딩 (실제: fastembed ONNX 추론)
-        let embedding = dummy_embed(text, 384);
+        let embedding = broker::pseudo_embed(text, 384);
 
         // G-Metric 계산
         let g_result = state.g_engine.compute(&embedding, &topic_knowledge);
@@ -321,10 +322,10 @@ async fn compute_g_metric(
     state: web::Data<AppState>,
     req: web::Json<GMetricRequest>,
 ) -> impl Responder {
-    let q = dummy_embed(&req.query_text, 384);
+    let q = broker::pseudo_embed(&req.query_text, 384);
     let k_vecs: Vec<Vec<f32>> = req.knowledge_texts
         .iter()
-        .map(|t| dummy_embed(t, 384))
+        .map(|t| broker::pseudo_embed(t, 384))
         .collect();
 
     let result = state.g_engine.compute(&q, &k_vecs);
@@ -358,7 +359,7 @@ async fn compute_g_metric(
 // ============================
 
 /// 더미 임베딩 (실제: fastembed ONNX)
-fn dummy_embed(text: &str, dim: usize) -> Vec<f32> {
+fn broker::pseudo_embed(text: &str, dim: usize) -> Vec<f32> {
     let hash = xxhash_rust::xxh3::xxh3_64(text.as_bytes());
     let mut v = Vec::with_capacity(dim);
     let mut seed = hash;
@@ -381,6 +382,21 @@ fn synco_clean(text: &str) -> String {
 // ============================
 
 #[actix_web::main]
+// ============================
+// POST /api/v1/clean — Sync-O Deep Clean
+// ============================
+
+async fn handle_clean(
+    state: web::Data<AppState>,
+    body: web::Json<synco::CleanRequest>,
+) -> impl Responder {
+    let result = state.synco.clean(&body.stream_data);
+    HttpResponse::Ok()
+        .insert_header(("X-Processing-Ns", result.processing_ns.to_string()))
+        .json(result)
+}
+
+
 async fn main() -> std::io::Result<()> {
     // 로거 초기화
     tracing_subscriber::fmt()
@@ -403,13 +419,16 @@ async fn main() -> std::io::Result<()> {
         brave_key: std::env::var("BRAVE_API_KEY").unwrap_or_default(),
         base_rpc_url: std::env::var("BASE_RPC_URL")
             .unwrap_or("https://mainnet.base.org".into()),
+        coingecko_api_key: std::env::var("COINGECKO_API_KEY").unwrap_or_default(),
     };
 
     let semantic_cache = Arc::new(filter::SocraticMlaEngine::new(10_000));
     let g_engine_shared = Arc::new(filter::GMetricEngine::default());
     let tariff_shared = Arc::new(pricing::TariffEngine::default());
 
+    let synco_engine = Arc::new(synco::SyncOEngine::new());
     let state = web::Data::new(AppState {
+        synco: synco_engine,
         broker: Arc::new(GrandCrossApiBroker::new(
             provider_config,
             semantic_cache,
