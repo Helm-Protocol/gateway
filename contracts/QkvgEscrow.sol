@@ -64,16 +64,17 @@ contract QkvgEscrow is ReentrancyGuard, Ownable {
     // CONSTRUCTOR
     // ============================
 
+    // Helm Protocol Treasury — 모든 수수료 수취 주소
+    address public constant HELM_TREASURY = 0x7e0118A33202c03949167853b05631baC0fA9756;
+
     constructor(
         address _gateway,
-        address _treasury,
         address _yieldProtocol
     ) Ownable(msg.sender) {
         require(_gateway != address(0), "gateway cannot be zero");
-        require(_treasury != address(0), "treasury cannot be zero");
 
-        gateway = _gateway;
-        treasury = _treasury;
+        gateway  = _gateway;
+        treasury = HELM_TREASURY;          // 하드코딩 — 변경 불가
         yieldProtocol = _yieldProtocol;
     }
 
