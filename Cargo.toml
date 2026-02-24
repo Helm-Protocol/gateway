@@ -64,8 +64,7 @@ sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-rustls", "uuid"
 # ethers = { version = "2" }  # TODO: 배포 시 활성화
 
 # === EMBEDDING (Day 2 - Layer 2/3) ===
-# fastembed = "3"  # TODO: 배포 시 활성화 (ONNX 추론)
-# 개발 단계: 더미 임베딩 사용 (main.rs dummy_embed)
+fastembed = { version = "3", optional = true }  # BGE-small-en-v1.5 ONNX semantic embedding
 
 # === UTILITIES ===
 uuid = { version = "1", features = ["v4", "serde"] }
@@ -90,3 +89,8 @@ mockito = "1"
 opt-level = 3
 lto = true
 codegen-units = 1
+
+
+[features]
+default = []
+fastembed = ["dep:fastembed"]  # enable semantic embedding
