@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-// contracts/QkvgEscrow.sol
+// contracts/HelmSenseEscrow.sol
 //
-// [H-8] QKV-G Gateway 에스크로 컨트랙트
+// [H-8] Helm-sense Gateway 에스크로 컨트랙트
 // Base Chain (Ethereum L2) 배포 대상
 //
 // 취약점 수정 (Helm_INIt_Secure.txt):
@@ -18,7 +18,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
-contract QkvgEscrow is ReentrancyGuard, Ownable {
+contract HelmSenseEscrow is ReentrancyGuard, Ownable {
 
     // ============================
     // STATE
@@ -56,7 +56,7 @@ contract QkvgEscrow is ReentrancyGuard, Ownable {
     // ============================
 
     modifier onlyGateway() {
-        require(msg.sender == gateway, "QkvgEscrow: caller is not gateway");
+        require(msg.sender == gateway, "HelmSenseEscrow: caller is not gateway");
         _;
     }
 

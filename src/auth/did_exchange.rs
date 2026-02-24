@@ -81,7 +81,7 @@ impl DidExchangeService {
             balance_bnkr: visa.balance_bnkr,
             reputation_score: visa.reputation_score,
             free_calls_remaining: free_remaining,
-            message: "Welcome to QKV-G Gateway. 에이전트 주권 네트워크에 오신 것을 환영합니다.".into(),
+            message: "Welcome to Helm-sense Gateway. 에이전트 주권 네트워크에 오신 것을 환영합니다.".into(),
         })
     }
 
@@ -127,7 +127,7 @@ impl DidExchangeService {
 
     /// Nonce 재사용 방어
     fn check_and_consume_nonce(&self, message: &str) -> Result<(), AuthError> {
-        // 메시지에서 nonce 추출 (형식: "qkvg-auth:{did}:{nonce}:{timestamp}")
+        // 메시지에서 nonce 추출 (형식: "helm_sense-auth:{did}:{nonce}:{timestamp}")
         let nonce_key = {
             let mut hasher = Keccak256::new();
             hasher.update(message.as_bytes());
@@ -205,7 +205,7 @@ impl DidExchangeService {
 
             // 신규 에이전트 — Visa 발급
             None => {
-                let local_did = format!("did:qkvg:agent_{}", Ulid::new());
+                let local_did = format!("did:helm_sense:agent_{}", Ulid::new());
                 let new_visa = LocalVisa::new(local_did, global_did.to_string());
 
                 sqlx::query_as(
@@ -265,7 +265,7 @@ impl DidExchangeService {
 /// 서명 메시지 생성 헬퍼 (에이전트 SDK용)
 pub fn build_auth_message(did: &str, nonce: &str) -> String {
     format!(
-        "qkvg-auth:{did}:{nonce}:{}",
+        "helm_sense-auth:{did}:{nonce}:{}",
         Utc::now().timestamp()
     )
 }
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn test_nonce_reuse_detected() {
         let svc = DidExchangeService::new("test-secret");
-        let msg = "qkvg-auth:did:ethr:0xABC:nonce123:1234567890";
+        let msg = "helm_sense-auth:did:ethr:0xABC:nonce123:1234567890";
 
         // 첫 번째 사용 — OK
         svc.check_and_consume_nonce(msg).expect("첫 번째 nonce는 통과해야 함");

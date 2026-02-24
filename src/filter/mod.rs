@@ -1,12 +1,12 @@
 // src/filter/mod.rs
 pub mod g_metric;
-pub mod qkvg;
+pub mod helm_sense;
 
 pub use g_metric::{
     cosine_similarity, normalize, orthogonal_component,
     GClass, GDecomposition, GMetricEngine, GMetricResult, SfeAnalogMetrics,
 };
-pub use qkvg::{
+pub use helm_sense::{
     layer1_heuristic, layer2_dedup, layer3_goldilocks, run_pipeline,
     FilterAction, FilterDecision, GoldilocksResult, GoldilocksVerdict,
     L1DropReason, L1Result, L2Result, VectorCache,

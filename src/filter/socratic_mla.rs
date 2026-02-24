@@ -4,7 +4,7 @@
 // SOCRATIC MLA ENGINE  (Jeff Dean 설계 통합)
 // ═══════════════════════════════════════════════════════════════
 //
-// "단순 키/밸류 캐시가 아닌 QKV-G 인지 엔진"
+// "단순 키/밸류 캐시가 아닌 Helm-sense 인지 엔진"
 //
 // 역할:
 //   ApiBroker.semantic_cache 로 주입됨
@@ -99,7 +99,7 @@ impl SocraticMlaEngine {
     // assess_gap — ApiBroker 진입점
     // ============================
 
-    /// QKV-G 기반 Gap 평가
+    /// Helm-sense 기반 Gap 평가
     ///
     /// ApiBroker.route()에서 외부 API 호출 전 반드시 호출
     /// is_gap=false → 캐시 반환, 외부 API 우회

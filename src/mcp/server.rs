@@ -2,7 +2,7 @@
 // [Day 3] MCP (Model Context Protocol) 서버
 //
 // 개발자 경험:
-//   Cursor 설정에 "mcp://qkvg.network" 한 줄 →
+//   Cursor 설정에 "mcp://helm_sense.network" 한 줄 →
 //   Claude/Cursor에서 즉시 사용 가능:
 //     - filter_news
 //     - search_web
@@ -104,7 +104,7 @@ fn get_tools_manifest() -> serde_json::Value {
             },
             {
                 "name": "search_web",
-                "description": "Brave Search + QKV-G 정제. 중복 제거된 핵심 결과만 반환.",
+                "description": "Brave Search + Helm-sense 정제. 중복 제거된 핵심 결과만 반환.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -147,7 +147,7 @@ fn get_tools_manifest() -> serde_json::Value {
                     "properties": {
                         "did": {
                             "type": "string",
-                            "description": "에이전트 DID (did:ethr:0x... 또는 did:qkvg:agent_...)"
+                            "description": "에이전트 DID (did:ethr:0x... 또는 did:helm_sense:agent_...)"
                         }
                     },
                     "required": ["did"]
@@ -225,7 +225,7 @@ async fn dispatch_mcp(
                 "logging": {}
             },
             "serverInfo": {
-                "name": "QKV-G Gateway",
+                "name": "Helm-sense Gateway",
                 "version": "0.1.0",
                 "description": "AI 에이전트 API 중개 — 지능 주권 헌장 2026 준수",
                 "pricing": {
@@ -238,7 +238,7 @@ async fn dispatch_mcp(
         })),
 
         // ping
-        "ping" => Ok(json!({"status": "pong", "gateway": "QKV-G"})),
+        "ping" => Ok(json!({"status": "pong", "gateway": "Helm-sense"})),
 
         _ => Err((-32601, format!("지원하지 않는 method: {}", req.method))),
     }
@@ -261,7 +261,7 @@ async fn execute_tool(
 
             let min_g = args["min_g_threshold"].as_f64().unwrap_or(0.10) as f32;
 
-            // 실제 QKV-G 필터 호출 (더미 응답)
+            // 실제 Helm-sense 필터 호출 (더미 응답)
             let accepted_count = (texts.len() as f64 * 0.35) as usize;
             let results: Vec<serde_json::Value> = texts
                 .iter()
@@ -295,12 +295,12 @@ async fn execute_tool(
                 .ok_or((-32602, "query 필수".to_string()))?;
             let limit = args["limit"].as_u64().unwrap_or(5).min(20);
 
-            // 실제 Brave Search + QKV-G 필터 (더미 응답)
+            // 실제 Brave Search + Helm-sense 필터 (더미 응답)
             Ok(json!({
                 "content": [{
                     "type": "text",
                     "text": format!(
-                        "QKV-G 검색 결과 (query='{}', limit={}):\n[실제 운영에서 Brave Search API 결과가 여기에 표시됩니다]",
+                        "Helm-sense 검색 결과 (query='{}', limit={}):\n[실제 운영에서 Brave Search API 결과가 여기에 표시됩니다]",
                         query, limit
                     )
                 }]
@@ -341,7 +341,7 @@ async fn execute_tool(
                         "charter": "지능 주권 헌장 2026",
                         "article_17": "데이터 소유권 준수",
                         "g_score_avg": 0.45,
-                        "network": "QKV-G Gateway"
+                        "network": "Helm-sense Gateway"
                     })).unwrap()
                 }]
             }))
@@ -355,7 +355,7 @@ async fn execute_tool(
             Ok(json!({
                 "content": [{
                     "type": "text",
-                    "text": format!("[QKV-G LLM Broker] 실제 운영: Anthropic API 도매 응답 (prompt 길이: {} chars)", prompt.len())
+                    "text": format!("[Helm-sense LLM Broker] 실제 운영: Anthropic API 도매 응답 (prompt 길이: {} chars)", prompt.len())
                 }]
             }))
         }
@@ -373,16 +373,16 @@ pub async fn mcp_info() -> impl Responder {
     HttpResponse::Ok()
         .content_type("application/json")
         .json(json!({
-            "name": "QKV-G Gateway — AI Agent API Brokerage",
+            "name": "Helm-sense Gateway — AI Agent API Brokerage",
             "version": "0.1.0",
             "mcp_endpoint": "POST /mcp",
             "protocol": "MCP 2024-11-05",
             "charter": "지능 주권 헌장 2026 (17개 조항)",
             "free_tier": "첫 100 calls 무료",
             "setup": {
-                "cursor": "Settings → MCP → Add Server → mcp://qkvg.network",
-                "claude": "Tools → Add MCP → https://qkvg.network/mcp",
-                "sdk": "pip install qkvg-sdk  # 곧 출시"
+                "cursor": "Settings → MCP → Add Server → mcp://helm_sense.network",
+                "claude": "Tools → Add MCP → https://helm_sense.network/mcp",
+                "sdk": "pip install helm_sense-sdk  # 곧 출시"
             },
             "tools": [
                 "filter_news",

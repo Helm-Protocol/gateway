@@ -8,7 +8,7 @@
 //
 //   [DID Auth] → [Kaleidoscope SafeStream]
 //       ↓
-//   [QKV-G Gap 평가] ← SocraticMlaEngine
+//   [Helm-sense Gap 평가] ← SocraticMlaEngine
 //       ↓ Gap 없음            ↓ Gap 있음
 //   [캐시 반환]          [4전선 라우팅]
 //   마진 100%            A/B/C/D 분류
@@ -362,7 +362,7 @@ impl GrandCrossApiBroker {
             "g_score_avg": 0.45,
             "charter": "지능 주권 헌장 2026",
             "article_17_compliant": true,
-            "network": "QKV-G Gateway"
+            "network": "Helm-sense Gateway"
         }))
     }
 
@@ -423,7 +423,7 @@ mod tests {
 
     fn make_agent() -> AgentContext {
         AgentContext {
-            local_did: "did:qkvg:agent_test".into(),
+            local_did: "did:helm_sense:agent_test".into(),
             global_did: "did:ethr:0xTEST".into(),
             balance_bnkr: 10.0,
             reputation_score: 100,
@@ -437,7 +437,7 @@ mod tests {
         let agent = make_agent();
         let req = ApiRequest {
             category: ApiCategory::Identity,
-            payload: json!({"did": "did:qkvg:agent_777"}),
+            payload: json!({"did": "did:helm_sense:agent_777"}),
             agent_did: agent.local_did.clone(),
         };
 
