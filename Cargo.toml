@@ -1,5 +1,5 @@
 [package]
-name = "helm-gateway"
+name = "qkvg-gateway"
 version = "0.1.0"
 edition = "2021"
 description = "Helm-sense API Gateway — AI Agent API Brokerage with G-Metric Filtering"
@@ -7,7 +7,7 @@ description = "Helm-sense API Gateway — AI Agent API Brokerage with G-Metric F
 [workspace]
 
 [[bin]]
-name = "helm-gateway"
+name = "qkvg-gateway"
 path = "src/main.rs"
 
 [dependencies]

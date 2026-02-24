@@ -61,7 +61,7 @@ cargo run
 ```bash
 curl -X POST http://localhost:8080/auth/exchange \
   -H "Content-Type: application/json" \
-  -d '{"global_did":"did:ethr:0xABC","signature":"0x...","signed_message":"helm_sense-auth:..."}'
+  -d '{"global_did":"did:ethr:0xABC","signature":"0x...","signed_message":"qkvg-auth:..."}'
 ```
 
 ### 뉴스 필터링 (B전선 핵심)
@@ -118,7 +118,7 @@ src/
 ├── payments/x402.rs     # [H-8] x402 State Channel
 ├── filter/
 │   ├── g_metric.rs      # G-Metric 수학 엔진 (Jeff Dean)
-│   └── helm_sense.rs          # 3-Layer 필터 파이프라인
+│   └── qkvg.rs          # 3-Layer 필터 파이프라인
 ├── broker/mod.rs        # 4전선 API 라우터
 ├── pricing/novelty.rs   # Two-Part Tariff
 └── mcp/server.rs        # MCP JSON-RPC

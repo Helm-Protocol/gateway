@@ -108,7 +108,7 @@ impl PaymentTicket {
         hasher.update(amount_micro.to_le_bytes());
         hasher.update(nonce.to_le_bytes());
         hasher.update(timestamp.to_le_bytes());
-        hasher.update(b"helm_sense-payment-v1"); // 도메인 분리
+        hasher.update(b"qkvg-payment-v1"); // 도메인 분리
         hasher.finalize().into()
     }
 
@@ -345,7 +345,7 @@ mod tests {
         let verifying_key = signing_key.verifying_key();
 
         let ticket = PaymentTicket::create(
-            "did:helm_sense:agent_test",
+            "did:qkvg:agent_test",
             0.05,
             1,
             &signing_key,
@@ -378,7 +378,7 @@ mod tests {
         let processor = X402PaymentProcessor::new(1000);
 
         let ticket = PaymentTicket::create(
-            "did:helm_sense:agent_test", 0.01, 1, &signing_key
+            "did:qkvg:agent_test", 0.01, 1, &signing_key
         ).unwrap();
 
         // 첫 번째 — OK

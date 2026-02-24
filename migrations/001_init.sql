@@ -7,7 +7,7 @@
 -- ============================
 CREATE TABLE IF NOT EXISTS local_visas (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    local_did       TEXT NOT NULL UNIQUE,   -- did:helm:agent_ULID
+    local_did       TEXT NOT NULL UNIQUE,   -- did:qkvg:agent_ULID
     global_did      TEXT NOT NULL UNIQUE,   -- did:ethr:0xABC...
     balance_bnkr    DOUBLE PRECISION NOT NULL DEFAULT 0.0,
     reputation_score INTEGER NOT NULL DEFAULT 100,
