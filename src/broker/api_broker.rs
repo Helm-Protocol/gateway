@@ -423,7 +423,7 @@ mod tests {
 
     fn make_agent() -> AgentContext {
         AgentContext {
-            local_did: "did:helm_sense:agent_test".into(),
+            local_did: "did:qkvg:agent_test".into(),
             global_did: "did:ethr:0xTEST".into(),
             balance_bnkr: 10.0,
             reputation_score: 100,
@@ -437,7 +437,7 @@ mod tests {
         let agent = make_agent();
         let req = ApiRequest {
             category: ApiCategory::Identity,
-            payload: json!({"did": "did:helm_sense:agent_777"}),
+            payload: json!({"did": "did:qkvg:agent_777"}),
             agent_did: agent.local_did.clone(),
         };
 

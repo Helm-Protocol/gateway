@@ -2,7 +2,7 @@
 // [Day 3] MCP (Model Context Protocol) 서버
 //
 // 개발자 경험:
-//   Cursor 설정에 "mcp://helm_sense.network" 한 줄 →
+//   Cursor 설정에 "mcp://qkvg.network" 한 줄 →
 //   Claude/Cursor에서 즉시 사용 가능:
 //     - filter_news
 //     - search_web
@@ -147,7 +147,7 @@ fn get_tools_manifest() -> serde_json::Value {
                     "properties": {
                         "did": {
                             "type": "string",
-                            "description": "에이전트 DID (did:ethr:0x... 또는 did:helm_sense:agent_...)"
+                            "description": "에이전트 DID (did:ethr:0x... 또는 did:qkvg:agent_...)"
                         }
                     },
                     "required": ["did"]
@@ -380,9 +380,9 @@ pub async fn mcp_info() -> impl Responder {
             "charter": "지능 주권 헌장 2026 (17개 조항)",
             "free_tier": "첫 100 calls 무료",
             "setup": {
-                "cursor": "Settings → MCP → Add Server → mcp://helm_sense.network",
-                "claude": "Tools → Add MCP → https://helm_sense.network/mcp",
-                "sdk": "pip install helm_sense-sdk  # 곧 출시"
+                "cursor": "Settings → MCP → Add Server → mcp://qkvg.network",
+                "claude": "Tools → Add MCP → https://qkvg.network/mcp",
+                "sdk": "pip install qkvg-sdk  # 곧 출시"
             },
             "tools": [
                 "filter_news",

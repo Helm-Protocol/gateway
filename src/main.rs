@@ -31,7 +31,7 @@ mod payments;
 mod pricing;
 
 use filter::g_metric::{GMetricEngine, SfeAnalogMetrics};
-use filter::helm_sense::VectorCache;
+use filter::qkvg::VectorCache;
 use broker::{GrandCrossApiBroker, ProviderConfig};
 use payments::x402::X402PaymentProcessor;
 use pricing::TariffEngine;
@@ -134,7 +134,7 @@ async fn did_exchange(
 
     // 개발 모드: 더미 응답
     HttpResponse::Ok().json(json!({
-        "local_did": format!("did:helm_sense:agent_{}", ulid::Ulid::new()),
+        "local_did": format!("did:qkvg:agent_{}", ulid::Ulid::new()),
         "session_token": "dev-mode-token",
         "balance_bnkr": 0.0,
         "reputation_score": 100,
@@ -386,7 +386,7 @@ async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("helm_sense_gateway=info".parse().unwrap())
+                .add_directive("qkvg_gateway=info".parse().unwrap())
         )
         .init();
 

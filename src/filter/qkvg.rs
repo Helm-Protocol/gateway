@@ -1,4 +1,4 @@
-// src/filter/helm_sense.rs
+// src/filter/qkvg.rs
 // [Day 2] Helm-sense 3-Layer 필터 엔진
 //
 // 설계 (Helm_Ego.txt G-Metric + Helm_Project.txt SyncO 통합):
