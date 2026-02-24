@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HELM · COMMAND CENTER</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&family=Rajdhani:wght@300;400;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --rosso:   #D40000;
+  --rosso2:  #FF2020;
+  --giallo:  #FDFB00;
+  --carbon:  #080808;
+  --carbon2: #111111;
+  --carbon3: #1A1A1A;
+  --g1: #222; --g2: #333; --g3: #666; --g4: #999;
+  --white: #F0F0F0;
+  --green: #00FF88;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; overflow:hidden; }
+body {
+  background: var(--carbon);
+  color: var(--white);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 13px;
+}
+
+/* 탄소섬유 텍스처 */
+body::before {
+  content:'';
+  position:fixed; inset:0;
+  background-image:
+    repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(255,255,255,.008) 3px, rgba(255,255,255,.008) 6px),
+    repeating-linear-gradient(-45deg, transparent, transparent 3px, rgba(255,255,255,.008) 3px, rgba(255,255,255,.008) 6px);
+  pointer-events:none; z-index:0;
+}
+/* 상단 빨간 후광 */
+body::after {
+  content:'';
+  position:fixed; top:-300px; left:50%; transform:translateX(-50%);
+  width:1000px; height:500px;
+  background:radial-gradient(ellipse, rgba(212,0,0,.15) 0%, transparent 70%);
+  pointer-events:none; z-index:0;
+}
+
+.layout {
+  position:relative; z-index:1;
+  display:grid;
+  grid-template-rows:56px 1fr 48px;
+  height:100vh;
+}
+
+/* ── HEADER ── */
+header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:0 28px;
+  border-bottom:1px solid var(--g1);
+  background:linear-gradient(90deg, rgba(212,0,0,.06), transparent 50%);
+}
+.brand { display:flex; align-items:baseline; gap:14px; }
+.brand-main {
+  font-family:'Orbitron',monospace; font-weight:900; font-size:20px;
+  letter-spacing:8px; color:var(--white);
+}
+.brand-main em {
+  color:var(--rosso); font-style:normal;
+  text-shadow:0 0 18px rgba(212,0,0,.9), 0 0 40px rgba(212,0,0,.4);
+}
+.brand-sub { font-size:9px; color:var(--g3); letter-spacing:4px; }
+.hdr-right { display:flex; align-items:center; gap:24px; }
+.live-dot {
+  width:7px; height:7px; border-radius:50%;
+  background:var(--green); box-shadow:0 0 10px var(--green);
+  animation:blink 2s ease-in-out infinite;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+.hdr-tag { font-size:9px; letter-spacing:3px; }
+.hdr-clock { font-family:'Orbitron',monospace; font-size:12px; color:var(--g3); letter-spacing:2px; }
+
+/* ── SCANLINE ── */
+.scan {
+  position:fixed; left:0; right:0; height:1px;
+  background:linear-gradient(90deg, transparent 0%, rgba(212,0,0,.35) 50%, transparent 100%);
+  animation:scanmove 5s linear infinite;
+  pointer-events:none; z-index:200;
+}
+@keyframes scanmove { from{top:0} to{top:100vh} }
+
+/* ── MAIN ── */
+.main {
+  display:grid;
+  grid-template-columns:260px 1fr 260px;
+  overflow:hidden;
+}
+
+/* ── PANELS ── */
+.panel { padding:20px 16px; display:flex; flex-direction:column; gap:14px; }
+.panel-l { border-right:1px solid var(--g1); background:linear-gradient(180deg,rgba(212,0,0,.035),transparent 60%); }
+.panel-r { border-left:1px solid var(--g1); }
+.panel-c {
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:space-between;
+  padding:20px 36px; gap:12px;
+}
+
+/* ── WIDGET ── */
+.w {
+  background:var(--carbon2);
+  border:1px solid var(--g1);
+  padding:14px 14px 14px 18px;
+  position:relative; overflow:hidden;
+  animation:fadeup .5s ease both;
+}
+.w::before { content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--rosso); }
+.w.gold::before { background:var(--giallo); }
+.w.green-b::before { background:var(--green); }
+@keyframes fadeup { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:none} }
+.wl { font-size:9px; color:var(--g3); letter-spacing:3px; margin-bottom:6px; }
+.wv {
+  font-family:'Orbitron',monospace; font-size:34px; font-weight:700;
+  color:var(--rosso2); text-shadow:0 0 16px rgba(255,32,32,.5);
+  line-height:1;
+}
+.wv.y { color:var(--giallo); text-shadow:0 0 16px rgba(253,251,0,.5); }
+.wv.w { color:var(--white); text-shadow:none; }
+.wv.g { color:var(--green); text-shadow:0 0 12px rgba(0,255,136,.5); }
+.wu { font-size:9px; color:var(--g3); margin-top:3px; letter-spacing:2px; }
+
+/* ── CENTER TOP: BNKR ── */
+.bnkr-wrap { text-align:center; width:100%; padding-top:4px; }
+.bnkr-lbl { font-size:9px; color:var(--g3); letter-spacing:5px; margin-bottom:4px; }
+.bnkr-val {
+  font-family:'Orbitron',monospace; font-weight:900; font-size:56px;
+  color:var(--giallo);
+  text-shadow:0 0 30px rgba(253,251,0,.7), 0 0 70px rgba(253,251,0,.25);
+  letter-spacing:-2px; line-height:1;
+}
+.bnkr-sub { font-size:9px; color:var(--g3); letter-spacing:3px; margin-top:4px; }
+
+/* ── TACHOMETER ── */
+.tach-wrap { position:relative; width:220px; height:220px; flex-shrink:0; }
+.tach-wrap svg { width:100%; height:100%; }
+.tach-label {
+  position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+  text-align:center;
+}
+.tach-v {
+  font-family:'Orbitron',monospace; font-weight:900; font-size:38px;
+  color:var(--giallo);
+  text-shadow:0 0 24px rgba(253,251,0,.7);
+  line-height:1;
+}
+.tach-u { font-size:9px; color:var(--g3); letter-spacing:3px; margin-top:3px; }
+
+/* ── HIT RATE ── */
+.hr-wrap { width:100%; max-width:420px; }
+.hr-hdr { display:flex; justify-content:space-between; font-size:9px; color:var(--g3); letter-spacing:2px; margin-bottom:6px; }
+.hr-pct { font-family:'Orbitron',monospace; font-size:13px; }
+.hr-track { height:5px; background:var(--g1); overflow:hidden; }
+.hr-fill {
+  height:100%; background:linear-gradient(90deg,var(--rosso),var(--rosso2));
+  transition:width .8s cubic-bezier(.4,0,.2,1); position:relative;
+}
+.hr-fill::after {
+  content:''; position:absolute; right:0; top:0; bottom:0; width:24px;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.5));
+  animation:shim 1.5s ease-in-out infinite;
+}
+@keyframes shim { 0%,100%{opacity:0} 50%{opacity:1} }
+.hr-fill.gold { background:linear-gradient(90deg,#B8860B,var(--giallo)); }
+.hr-marks { display:flex; justify-content:space-between; font-size:8px; color:var(--g2); margin-top:4px; }
+.hr-marks .tgt { color:var(--rosso); }
+
+/* ── FRONT ITEMS ── */
+.front {
+  background:var(--carbon2); border:1px solid var(--g1);
+  padding:11px 14px; position:relative;
+  animation:fadeup .5s ease both;
+}
+.fhdr { display:flex; justify-content:space-between; align-items:center; margin-bottom:7px; }
+.fname { font-size:9px; letter-spacing:2px; color:var(--g3); }
+.fbadge {
+  font-size:8px; letter-spacing:2px; padding:1px 7px; border:1px solid;
+}
+.fbadge.on  { color:var(--green); border-color:var(--green); text-shadow:0 0 6px var(--green); }
+.fbadge.sb  { color:var(--giallo); border-color:var(--giallo); }
+.ftrack { height:2px; background:var(--g1); }
+.fbar {
+  height:2px; transition:width 1s ease;
+  box-shadow:0 0 6px currentColor;
+}
+.fbar.red   { background:var(--rosso2); color:var(--rosso2); }
+.fbar.gold  { background:var(--giallo); color:var(--giallo); }
+.ftps {
+  font-family:'Orbitron',monospace; font-size:20px;
+  color:var(--white); margin-top:5px;
+}
+.fsub { font-size:8px; color:var(--g2); margin-top:1px; }
+
+/* ── G BAR CHART ── */
+.gbar-section { flex:1; min-height:0; }
+.gbar-lbl { font-size:9px; color:var(--g3); letter-spacing:3px; margin-bottom:6px; }
+.gbar-chart {
+  display:flex; align-items:flex-end; gap:3px;
+  height:52px; margin-bottom:4px;
+}
+.gbar-chart div {
+  flex:1; transition:height .6s ease;
+  min-height:2px;
+}
+.gbar-axis { display:flex; justify-content:space-between; font-size:8px; color:var(--g2); }
+
+/* ── LOG ── */
+.log-wrap { flex:1; min-height:0; overflow:hidden; }
+.log-lbl { font-size:9px; color:var(--g3); letter-spacing:3px; margin-bottom:6px; }
+.log-body { height:calc(100% - 24px); overflow:hidden; display:flex; flex-direction:column; gap:3px; }
+.log-line {
+  font-size:10px; padding:3px 8px; border-left:2px solid;
+  opacity:0; transform:translateX(-8px);
+  animation:logIn .35s ease forwards;
+}
+@keyframes logIn { to{opacity:1;transform:none} }
+.log-line.blk { border-color:var(--rosso); color:#FF6B6B; }
+.log-line.hit { border-color:var(--green); color:var(--green); }
+.log-line.pay { border-color:var(--giallo); color:var(--giallo); }
+.log-line.did { border-color:#88AAFF; color:#88AAFF; }
+
+/* ── FOOTER ── */
+footer {
+  border-top:1px solid var(--g1);
+  background:var(--carbon2);
+  display:flex; align-items:center;
+  padding:0 28px; gap:0;
+}
+.fstat { display:flex; align-items:center; gap:10px; padding:0 20px; }
+.fstat:first-child { padding-left:0; }
+.fstat-l { font-size:8px; letter-spacing:2px; color:var(--g3); }
+.fstat-v { font-family:'Orbitron',monospace; font-size:12px; }
+.fsep { width:1px; height:18px; background:var(--g1); }
+.charter { margin-left:auto; font-size:8px; color:var(--g2); letter-spacing:2px; }
+
+/* ── CORNER DECORATION ── */
+.w .c { position:absolute; width:10px; height:10px; border-color:rgba(212,0,0,.4); border-style:solid; }
+.c.tl{top:4px;left:4px;border-width:1px 0 0 1px}
+.c.tr{top:4px;right:4px;border-width:1px 1px 0 0}
+.c.bl{bottom:4px;left:4px;border-width:0 0 1px 1px}
+.c.br{bottom:4px;right:4px;border-width:0 1px 1px 0}
+</style>
+</head>
+<body>
+<div class="scan"></div>
+<div class="layout">
+
+<!-- HEADER -->
+<header>
+  <div class="brand">
+    <div class="brand-main">HELM <em>GATEWAY</em></div>
+    <div class="brand-sub">QKV-G · GRAND CROSS · v1.0.0</div>
+  </div>
+  <div class="hdr-right">
+    <div style="display:flex;align-items:center;gap:7px">
+      <div class="live-dot"></div>
+      <span class="hdr-tag" style="color:var(--green)">SYSTEM ONLINE</span>
+    </div>
+    <div class="hdr-clock" id="clk">--:--:--</div>
+    <div class="hdr-tag" style="color:var(--g3)">GCP · ICN</div>
+  </div>
+</header>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- LEFT: 방어 지표 + 로그 -->
+  <div class="panel panel-l">
+    <div class="w" style="animation-delay:.05s">
+      <div class="c tl"></div><div class="c br"></div>
+      <div class="wl">ATTACKS BLOCKED</div>
+      <div class="wv" id="w-blocked">0</div>
+      <div class="wu">Slowloris · OOM · Ghost conn</div>
+    </div>
+    <div class="w" style="animation-delay:.12s">
+      <div class="c tl"></div><div class="c br"></div>
+      <div class="wl">ACTIVE VISAS (DID)</div>
+      <div class="wv w" id="w-visas">0</div>
+      <div class="wu">인증된 에이전트</div>
+    </div>
+    <div class="w" style="animation-delay:.18s">
+      <div class="c tl"></div><div class="c br"></div>
+      <div class="wl">NONCE REPLAYS CAUGHT</div>
+      <div class="wv" id="w-replays">0</div>
+      <div class="wu">이중결제 시도 차단</div>
+    </div>
+    <div class="log-wrap" style="animation:fadeup .5s .25s ease both">
+      <div class="log-lbl">LIVE EVENT LOG</div>
+      <div class="log-body" id="log-body"></div>
+    </div>
+  </div>
+
+  <!-- CENTER: 수익 + 타코 + 히트율 -->
+  <div class="panel-c">
+    <!-- BNKR -->
+    <div class="bnkr-wrap" style="animation:fadeup .4s ease both">
+      <div class="bnkr-lbl">TOTAL REVENUE</div>
+      <div class="bnkr-val" id="bnkr">14823.44</div>
+      <div class="bnkr-sub">BNKR · Base Chain · x402</div>
+    </div>
+
+    <!-- TACHOMETER SVG -->
+    <div class="tach-wrap" style="animation:fadeup .5s .1s ease both">
+      <svg viewBox="0 0 220 220">
+        <defs>
+          <linearGradient id="ag" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#D40000"/>
+            <stop offset="100%" stop-color="#FF2020"/>
+          </linearGradient>
+          <filter id="gl">
+            <feGaussianBlur stdDeviation="2.5" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        <!-- bg track -->
+        <circle cx="110" cy="110" r="95" fill="none" stroke="#1A1A1A" stroke-width="14"
+          stroke-dasharray="520" stroke-dashoffset="130" transform="rotate(126 110 110)"/>
+        <!-- redzone -->
+        <circle cx="110" cy="110" r="95" fill="none" stroke="rgba(212,0,0,.18)" stroke-width="14"
+          stroke-dasharray="104" stroke-dashoffset="-284" transform="rotate(126 110 110)"/>
+        <!-- active arc -->
+        <circle cx="110" cy="110" r="95" fill="none" stroke="url(#ag)" stroke-width="14"
+          stroke-linecap="round" filter="url(#gl)"
+          stroke-dasharray="520" stroke-dashoffset="520"
+          transform="rotate(126 110 110)" id="arc"
+          style="transition:stroke-dashoffset .7s cubic-bezier(.4,0,.2,1)"/>
+        <!-- inner circle -->
+        <circle cx="110" cy="110" r="70" fill="#0C0C0C" stroke="#1A1A1A" stroke-width="1"/>
+        <!-- tick marks -->
+        <g id="ticks" stroke="#333" stroke-width="1"></g>
+      </svg>
+      <div class="tach-label">
+        <div class="tach-v" id="tps-val">0</div>
+        <div class="tach-u">TPS</div>
+      </div>
+    </div>
+
+    <!-- HIT RATE -->
+    <div class="hr-wrap" style="animation:fadeup .5s .2s ease both">
+      <div class="hr-hdr">
+        <span>QKV-G CACHE HIT RATE</span>
+        <span class="hr-pct" id="hr-pct" style="color:var(--rosso)">0%</span>
+      </div>
+      <div class="hr-track">
+        <div class="hr-fill" id="hr-fill" style="width:0%"></div>
+      </div>
+      <div class="hr-marks">
+        <span>0%</span>
+        <span class="tgt">◂ 수익 임계 70%</span>
+        <span>100%</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: 4전선 + G분포 -->
+  <div class="panel panel-r">
+    <div style="font-size:9px;color:var(--g3);letter-spacing:3px">4대 전선 STATUS</div>
+
+    <div class="front" style="animation-delay:.05s">
+      <div class="fhdr">
+        <span class="fname">A · LLM INFERENCE</span>
+        <span class="fbadge on">ACTIVE</span>
+      </div>
+      <div class="ftrack"><div class="fbar red" id="bar-a" style="width:60%"></div></div>
+      <div class="ftps" id="tv-a">0 <span style="font-size:10px;color:var(--g3)">req/s</span></div>
+      <div class="fsub">30~40% 마진 · OpenAI/Claude 도매</div>
+    </div>
+
+    <div class="front" style="animation-delay:.1s">
+      <div class="fhdr">
+        <span class="fname">B · SEARCH & NEWS</span>
+        <span class="fbadge on">ACTIVE</span>
+      </div>
+      <div class="ftrack"><div class="fbar red" id="bar-b" style="width:80%"></div></div>
+      <div class="ftps" id="tv-b">0 <span style="font-size:10px;color:var(--g3)">req/s</span></div>
+      <div class="fsub">캐시 히트 100% 마진 · Brave Search</div>
+    </div>
+
+    <div class="front" style="animation-delay:.15s">
+      <div class="fhdr">
+        <span class="fname">C · DEFI MEV-PROXY</span>
+        <span class="fbadge sb">STANDBY</span>
+      </div>
+      <div class="ftrack"><div class="fbar gold" id="bar-c" style="width:20%"></div></div>
+      <div class="ftps" id="tv-c" style="color:var(--giallo)">0 <span style="font-size:10px;color:var(--g3)">req/s</span></div>
+      <div class="fsub">캐시 절대 없음 · MEV보호 · 0.1%수수료</div>
+    </div>
+
+    <div class="front" style="animation-delay:.2s">
+      <div class="fhdr">
+        <span class="fname">D · IDENTITY / DID</span>
+        <span class="fbadge on">ACTIVE</span>
+      </div>
+      <div class="ftrack"><div class="fbar red" id="bar-d" style="width:40%"></div></div>
+      <div class="ftps" id="tv-d">0 <span style="font-size:10px;color:var(--g3)">req/s</span></div>
+      <div class="fsub">내부 DB · FICO 독점 · 생태계 락인</div>
+    </div>
+
+    <!-- G-Metric 분포 -->
+    <div class="gbar-section" style="animation:fadeup .5s .25s ease both">
+      <div class="gbar-lbl">G-METRIC 분포</div>
+      <div class="gbar-chart" id="gbc"></div>
+      <div class="gbar-axis">
+        <span>중복</span>
+        <span style="color:var(--rosso)">Goldilocks ▼</span>
+        <span>스팸</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<footer>
+  <div class="fstat">
+    <span class="fstat-l">UPTIME</span>
+    <span class="fstat-v" id="uptime">00:00:00</span>
+  </div>
+  <div class="fsep"></div>
+  <div class="fstat">
+    <span class="fstat-l">TOTAL CALLS</span>
+    <span class="fstat-v" id="tcalls">0K</span>
+  </div>
+  <div class="fsep"></div>
+  <div class="fstat">
+    <span class="fstat-l">AVG MARGIN</span>
+    <span class="fstat-v" id="margin" style="color:var(--giallo)">0%</span>
+  </div>
+  <div class="fsep"></div>
+  <div class="fstat">
+    <span class="fstat-l">ROLLUP QUEUE</span>
+    <span class="fstat-v" id="rollup">0 tickets</span>
+  </div>
+  <div class="fsep"></div>
+  <div class="fstat">
+    <span class="fstat-l">TREASURY</span>
+    <span class="fstat-v" id="treasury" style="color:var(--green)">$0</span>
+  </div>
+  <div class="charter">지능 주권 헌장 2026 · 제17조 준수 · True AI Freedom Through Decentralization</div>
+</footer>
+</div>
+
+<script>
+// ─── STATE ───────────────────────────────
+let S = {
+  bnkr: 14823.44,
+  tps: 0, tpsA:0, tpsB:0, tpsC:0, tpsD:0,
+  blocked:0, visas:412, replays:0,
+  cacheHit:0, totalCalls:0,
+  rollup:0, treasury:7411.72,
+  start: Date.now()
+};
+let gDist = [3,2,4,8,14,16,12,9,3,1]; // 초기 G분포
+
+function rng(a,b){return Math.random()*(b-a)+a}
+function ir(a,b){return Math.floor(rng(a,b))}
+function pick(a){return a[ir(0,a.length)]}
+
+// ─── ARC 타코미터 ─────────────────────────
+const ARC = 520;
+function setArc(v, max=2000){
+  const off = ARC - ARC * Math.min(v/max,1);
+  document.getElementById('arc').style.strokeDashoffset = off;
+}
+
+// ─── G바 렌더 ─────────────────────────────
+function renderG(){
+  const el = document.getElementById('gbc');
+  const tot = gDist.reduce((a,b)=>a+b,1);
+  el.innerHTML = '';
+  gDist.forEach((v,i)=>{
+    const h = Math.max(6, (v/tot)*100);
+    let col = '#2A2A2A';
+    if(i>=2&&i<=7) col = 'var(--rosso)';
+    if(i===4||i===5) col = 'var(--giallo)';
+    if(i>=8) col = '#222';
+    const d = document.createElement('div');
+    d.style.cssText = `height:${h}%;background:${col};box-shadow:0 0 5px ${col};transition:height .6s ease`;
+    el.appendChild(d);
+  });
+}
+
+// ─── 로그 ─────────────────────────────────
+const LOG_POOL = [
+  {t:'blk', m:['Slowloris 185.220.x.x → DROPPED','OOM payload 4.1MB → REJECT','Ghost conn timeout 45.33.x.x','Port scan BLOCKED 192.x.x.x','DDoS 312 reqs/s → rate-limited']},
+  {t:'hit', m:['Cache HIT G=0.04 → margin 100%','SocraticMLA exact match','Semantic dup G=0.08 → cached','L1 XXHash3 hit 0.3ms']},
+  {t:'pay', m:['G=0.72 novel → 0.072 BNKR charged','VoidKnowledge G=0.89 stored','Proof orthogonal=0.694 issued','x402 ticket verified 0.9ms']},
+  {t:'did', m:['DID issued did:helm:agent_'+ir(1000,9999),'ERC passport verified <1ms','Reputation score 87 → TRUSTED','Visa renewed agent_'+ir(100,999)]},
+];
+function addLog(){
+  const pool = pick(LOG_POOL);
+  const ts = new Date().toTimeString().slice(0,8);
+  const el = document.getElementById('log-body');
+  const line = document.createElement('div');
+  line.className = 'log-line '+pool.t;
+  line.textContent = ts+' '+pick(pool.m);
+  el.insertBefore(line, el.firstChild);
+  while(el.children.length > 9) el.removeChild(el.lastChild);
+}
+
+// ─── TICK (1초) ───────────────────────────
+function tick(){
+  S.tps   = ir(800,1300);
+  S.tpsA  = ir(60,160);
+  S.tpsB  = ir(280,560);
+  S.tpsC  = ir(15,70);
+  S.tpsD  = ir(80,180);
+  S.bnkr += rng(.06,.28);
+  S.treasury += rng(.03,.14);
+  S.blocked += Math.random()<.25 ? ir(1,4):0;
+  S.replays += Math.random()<.08 ? 1:0;
+  S.cacheHit = ir(61,83);
+  S.totalCalls += S.tps;
+  S.rollup += ir(4,18);
+  S.visas = ir(390,520);
+
+  // G분포 흔들기
+  const gi = ir(2,8);
+  gDist[gi] = Math.min(gDist[gi]+ir(0,3), 30);
+  gDist[ir(0,2)] = Math.max(0, gDist[ir(0,2)]-1);
+
+  // 로그 추가
+  if(Math.random()<.7) addLog();
+
+  // ─ DOM 업데이트 ─
+  setArc(S.tps);
+  document.getElementById('tps-val').textContent = S.tps.toLocaleString();
+  document.getElementById('bnkr').textContent    = S.bnkr.toFixed(2);
+  document.getElementById('w-blocked').textContent = S.blocked.toLocaleString();
+  document.getElementById('w-visas').textContent   = S.visas.toLocaleString();
+  document.getElementById('w-replays').textContent = S.replays;
+  document.getElementById('tcalls').textContent    = (S.totalCalls/1000).toFixed(1)+'K';
+  document.getElementById('rollup').textContent    = S.rollup.toLocaleString()+' tickets';
+  document.getElementById('treasury').textContent  = '$'+(S.treasury).toFixed(0);
+  document.getElementById('margin').textContent    = (S.cacheHit*.75+22).toFixed(0)+'%';
+
+  // 4전선
+  const setFront = (id, bar, v, max) => {
+    document.getElementById(id).innerHTML = v+' <span style="font-size:10px;color:var(--g3)">req/s</span>';
+    document.getElementById(bar).style.width = (v/max*100)+'%';
+  };
+  setFront('tv-a','bar-a',S.tpsA,180);
+  setFront('tv-b','bar-b',S.tpsB,600);
+  setFront('tv-c','bar-c',S.tpsC,80);
+  setFront('tv-d','bar-d',S.tpsD,200);
+
+  // 히트율
+  const fill = document.getElementById('hr-fill');
+  const pct  = document.getElementById('hr-pct');
+  fill.style.width = S.cacheHit+'%';
+  pct.textContent  = S.cacheHit+'%';
+  const gold = S.cacheHit >= 70;
+  fill.className = 'hr-fill'+(gold?' gold':'');
+  pct.style.color = gold ? 'var(--giallo)' : 'var(--rosso)';
+
+  renderG();
+}
+
+// 클록
+function clk(){
+  document.getElementById('clk').textContent = new Date().toTimeString().slice(0,8);
+}
+// 업타임
+function upt(){
+  const s = Math.floor((Date.now()-S.start)/1000);
+  const h=String(Math.floor(s/3600)).padStart(2,'0');
+  const m=String(Math.floor(s%3600/60)).padStart(2,'0');
+  const sc=String(s%60).padStart(2,'0');
+  document.getElementById('uptime').textContent = h+':'+m+':'+sc;
+}
+
+// SSE 실서버 연결 시도 (배포 환경)
+function trySSE(){
+  if(!window.EventSource) return;
+  try {
+    const es = new EventSource('/api/telemetry');
+    es.onmessage = e => {
+      const d = JSON.parse(e.data);
+      if(d.tps)             S.tps = d.tps;
+      if(d.total_bnkr)      S.bnkr = +d.total_bnkr;
+      if(d.blocked_attacks) S.blocked = d.blocked_attacks;
+      if(d.active_visas)    S.visas = d.active_visas;
+      if(d.cache_hit_rate)  S.cacheHit = d.cache_hit_rate;
+    };
+  } catch(e){}
+}
+
+// ─── INIT ────────────────────────────────
+renderG();
+setInterval(tick,1000);
+setInterval(clk,1000);
+setInterval(upt,1000);
+clk(); upt(); tick();
+trySSE();
+</script>
+</body>
+</html>
