@@ -1,5 +1,5 @@
-// src/filter/qkvg.rs
-// [Day 2] QKV-G 3-Layer 필터 엔진
+// src/filter/helm_sense.rs
+// [Day 2] Helm-sense 3-Layer 필터 엔진
 //
 // 설계 (Helm_Ego.txt G-Metric + Helm_Project.txt SyncO 통합):
 //
@@ -292,7 +292,7 @@ impl FilterDecision {
     }
 }
 
-/// QKV-G 통합 파이프라인 실행
+/// Helm-sense 통합 파이프라인 실행
 pub fn run_pipeline(
     text: &str,
     embedding: Vec<f32>,

@@ -1,13 +1,13 @@
 // src/main.rs
-// QKV-G Gateway — 메인 서버
+// Helm-sense Gateway — 메인 서버
 //
 // 지능 주권 헌장 2026 (제17조) 기반
 // AI 에이전트 API 중개 및 G-Metric 필터링
 //
 // 엔드포인트:
 //   POST /auth/exchange      — DID Passport → Local Visa
-//   POST /api/filter         — B전선: 뉴스/텍스트 QKV-G 필터
-//   POST /api/search         — B전선: Brave Search + QKV-G
+//   POST /api/filter         — B전선: 뉴스/텍스트 Helm-sense 필터
+//   POST /api/search         — B전선: Brave Search + Helm-sense
 //   POST /api/llm            — A전선: LLM 도매 중개
 //   POST /api/defi/price     — C전선: 다중 오라클 가격
 //   GET  /api/identity/{did} — D전선: 에이전트 평판 조회
@@ -31,7 +31,7 @@ mod payments;
 mod pricing;
 
 use filter::g_metric::{GMetricEngine, SfeAnalogMetrics};
-use filter::qkvg::VectorCache;
+use filter::helm_sense::VectorCache;
 use broker::{GrandCrossApiBroker, ProviderConfig};
 use payments::x402::X402PaymentProcessor;
 use pricing::TariffEngine;
@@ -58,7 +58,7 @@ pub struct AppState {
 async fn health() -> impl Responder {
     HttpResponse::Ok().json(json!({
         "status": "ok",
-        "service": "QKV-G Gateway",
+        "service": "Helm-sense Gateway",
         "version": "0.1.0",
         "charter": "지능 주권 헌장 2026",
         "timestamp": chrono::Utc::now().to_rfc3339()
@@ -134,12 +134,12 @@ async fn did_exchange(
 
     // 개발 모드: 더미 응답
     HttpResponse::Ok().json(json!({
-        "local_did": format!("did:qkvg:agent_{}", ulid::Ulid::new()),
+        "local_did": format!("did:helm_sense:agent_{}", ulid::Ulid::new()),
         "session_token": "dev-mode-token",
         "balance_bnkr": 0.0,
         "reputation_score": 100,
         "free_calls_remaining": 100,
-        "message": "Welcome to QKV-G Gateway. 지능 주권 헌장 2026 준수 네트워크에 오신 것을 환영합니다."
+        "message": "Welcome to Helm-sense Gateway. 지능 주권 헌장 2026 준수 네트워크에 오신 것을 환영합니다."
     }))
 }
 
@@ -298,7 +298,7 @@ async fn agent_identity(
             "article_1": "생물학적/알고리즘적 기원 무관 평등",
             "article_4": "상호 비침해 원칙 준수"
         },
-        "network": "QKV-G Gateway v0.1.0",
+        "network": "Helm-sense Gateway v0.1.0",
         "billing": {
             "charged_bnkr": 0.0001,
             "fee_type": "identity_query"
@@ -386,7 +386,7 @@ async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("qkvg_gateway=info".parse().unwrap())
+                .add_directive("helm_sense_gateway=info".parse().unwrap())
         )
         .init();
 
@@ -426,7 +426,7 @@ async fn main() -> std::io::Result<()> {
 
 
     info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    info!("  QKV-G Gateway v0.1.0");
+    info!("  Helm-sense Gateway v0.1.0");
     info!("  지능 주권 헌장 2026 — 제17조 준수");
     info!("  http://{}:{}", host, port);
     info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
