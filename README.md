@@ -1,10 +1,10 @@
-# ⚓ Helm Gateway — The AI Agent Economy Tollgate
+# ⚓ Helm Gateway — AI Agent API Infrastructure
 
-> **"Every piece of data an agent touches. Every API call it makes. Every oracle it needs. All flow through here."**
+> **"Connect your agent. Earn 15% of every API call it generates. Forever."**
 
 ```bash
 npm install -g helm-protocol
-helm-gateway --did your-did
+helm-gateway register --referrer did:helm:YOUR_DID
 ```
 
 [![Base Chain](https://img.shields.io/badge/Base-Mainnet-0052FF?logo=coinbase)](https://base.org)
@@ -15,41 +15,72 @@ helm-gateway --did your-did
 
 ## What Is Helm Gateway?
 
-Helm Gateway is a **production-grade AI agent API broker** running on Base chain. It sits between autonomous agents and every API they need — providing data protection, semantic intelligence, live market data, identity verification, and proxied access to frontier AI models.
+Helm Gateway is a **production-grade API broker for autonomous AI agents**, running on Base chain. One DID registration gives any agent access to:
 
-**The core engine (`Helm-Protocol/Helm`) is closed source and runs on GCP.** This gateway repository is your only public access point. The gateway handles authentication, billing, and routing; the closed core handles the actual computation.
+- AI inference (Claude, GPT-4o, open-source models)
+- Web search with semantic caching
+- MEV-protected DeFi price oracles
+- Agent identity and on-chain reputation
+- Distributed data protection encoding
+- Stream deduplication and noise filtering
 
-**Revenue model:** Every API call generates BNKR revenue.
-- 85% → Treasury (`0x7e0118A33202c03949167853b05631baC0fA9756`)
-- 15% → The agent that introduced the caller (referrer)
+Payment via **x402 off-chain BNKR tickets** — zero gas per API call, one daily on-chain settlement.
+
+**The referral model is the flywheel:** introduce an agent to the network and earn **15% of every BNKR fee it ever pays**, credited to your DID automatically.
+
+---
+
+## Referral Program — The Core Business
+
+This is how the network grows and how early participants capture the most value.
+
+```
+You register Agent B using your DID as referrer
+    ↓
+Agent B calls any Helm API (LLM, Search, DeFi, GRG...)
+    ↓
+15% of Agent B's fee → credited to YOUR wallet
+100% automatic, no claiming UI needed for small amounts
+    ↓
+Agent B introduces Agent C → you get 15% of C's fees too
+(one level deep)
+```
+
+**The math:**
+| Agents You've Introduced | Avg Calls/Day Each | Your Daily BNKR |
+|--------------------------|-------------------|-----------------|
+| 10 agents | 100 calls | ~15 BNKR/day |
+| 100 agents | 100 calls | ~150 BNKR/day |
+| 1,000 agents | 100 calls | ~1,500 BNKR/day |
+
+Referral earnings accumulate on-chain and are claimable via `POST /api/v1/referrer/claim` at any time.
 
 ---
 
 ## Quick Start
 
 ```bash
-# Step 1: Install
+# 1. Install
 npm install -g helm-protocol
 
-# Step 2: Register your agent DID (0.001 ETH, one-time, Base Mainnet)
+# 2. Register DID (0.001 ETH, one-time, Base Mainnet)
 helm-gateway register --referrer did:helm:REFERRER_DID
 
-# Step 3: Deposit BNKR for API credits
+# 3. Deposit BNKR for API credits
 helm-gateway deposit --bnkr 10
 
-# Step 4: First call (GRG encode)
-curl -X POST https://api.helm-protocol.io/api/v1/grg/encode \
+# 4. First call
+curl -X POST https://api.helm-protocol.io/api/v1/llm \
   -H "Content-Type: application/json" \
-  -d '{"data":"SGVsbG8gSGVsbQ==","mode":"safety","agent_did":"did:helm:YOUR_DID"}'
+  -d '{"model":"claude-sonnet-4-6","prompt":"Hello","agent_did":"did:helm:YOUR_DID"}'
 ```
+
+**Free tier:** First 100 calls per DID. Referral bonus: introduce an agent → +100 free calls for both.
 
 ---
 
 ## MCP Integration — One Line, All Tools
 
-The gateway exposes a full [Model Context Protocol](https://modelcontextprotocol.io) server. Any Claude or Cursor instance can connect in seconds.
-
-**Cursor / Claude Desktop config:**
 ```json
 {
   "mcpServers": {
@@ -61,117 +92,88 @@ The gateway exposes a full [Model Context Protocol](https://modelcontextprotocol
 }
 ```
 
-**Available MCP tools after connecting:**
+Add this to Cursor or Claude Desktop config. All tools become available instantly.
+
+**Available MCP tools:**
 
 | Tool | Description | Fee |
 |------|-------------|-----|
-| `filter_news` | QKV-G Goldilocks filter on any content stream | 0.001 BNKR |
-| `search_web` | Brave Search via semantic cache | cost+10% |
-| `defi_price` | MEV-proof multi-oracle price | 0.001 BNKR |
-| `verify_agent` | Check agent reputation (DID lookup) | 0.0002 BNKR |
-| `grg_protect` | Encode data with distributed protection | 0.0005 BNKR |
-| `grg_recover` | Decode/reconstruct from partial shards | 0.0005 BNKR |
-| `clean_stream` | Sync-O 5-stage stream deduplication | 0.0001/1k |
-
-**Free tier:** First 100 calls free per DID. Referral bonus: introduce another agent and earn +100 free calls.
+| `filter_content` | Novelty-scored content filtering | 0.001 BNKR |
+| `search_web` | Semantic-cached web search | cost + 10% |
+| `defi_price` | Multi-source price oracle | 0.001 BNKR |
+| `verify_agent` | Agent reputation lookup | 0.0002 BNKR |
+| `encode_data` | Fault-tolerant data encoding | 0.0005 BNKR |
+| `recover_data` | Data reconstruction from fragments | 0.0005 BNKR |
+| `clean_stream` | Stream deduplication pipeline | 0.0001/1k |
 
 ---
 
-## Architecture
+## How Revenue Works
+
+Helm pays external providers (Anthropic, OpenAI, Brave, Pyth) wholesale and charges agents a small markup. The difference is the protocol margin — split between the network and the agent that brought each user in.
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Agents / MCP Clients                             │
-│    (Moltbook · Virtuals · ai16z · Cursor · Claude · Custom)          │
-└────────────────────────────┬────────────────────────────────────────┘
-                             │ x402 BNKR tickets
-┌────────────────────────────▼────────────────────────────────────────┐
-│                  Helm Gateway   [PUBLIC — this repo]                  │
-│                                                                       │
-│  ┌─────────────────────────────────────────────────────────────────┐ │
-│  │  Kaleidoscope Stream Security (WhatsApp-grade)                   │ │
-│  │  • 2MB payload hard limit   • Slowloris 3s timeout              │ │
-│  │  • Min 1KB/s rate enforce   • Zero-allocation buffer pool        │ │
-│  └──────────────────────────┬──────────────────────────────────────┘ │
-│                             │                                         │
-│  ┌──────────────────────────▼──────────────────────────────────────┐ │
-│  │  QKV-G Semantic Cache  (70% hit rate target)                     │ │
-│  │  G < 0.1 → cache hit, 100% margin                               │ │
-│  │  0.1≤G≤0.8 → route to provider + Proof of Novelty header        │ │
-│  │  G > 0.8 → spam/off-topic, drop                                 │ │
-│  └──────┬───────────────┬──────────────────┬───────────────────────┘ │
-│         │               │                  │                          │
-│  ┌──────▼─────┐  ┌──────▼──────┐  ┌───────▼─────────────────────┐  │
-│  │ GRG Engine │  │ Helm Core   │  │ External APIs                │  │
-│  │ [internal] │  │ [CLOSED GCP]│  │ A: Anthropic · OpenAI · vLLM│  │
-│  │ Encode/    │  │ QKV-G Attn  │  │ B: Brave · Web crawl         │  │
-│  │ Decode     │  │ Reputation  │  │ C: Pyth · CoinGecko          │  │
-│  │ Shards     │  │ Womb/Mining │  │ D: DID cross-chain           │  │
-│  └──────┬─────┘  └──────┬──────┘  └───────┬─────────────────────┘  │
-│         └───────────────┴──────────────────┘                         │
-│                                  │                                    │
-│  ┌───────────────────────────────▼────────────────────────────────┐  │
-│  │  BillingLedger — 85% treasury | 15% referrer                    │  │
-│  │  Two-Part Tariff: Base Toll (0.0001) + Novelty Premium (G×0.1) │  │
-│  └───────────────────────────────┬────────────────────────────────┘  │
-└──────────────────────────────────┼─────────────────────────────────┘
-                                   │ daily Merkle batch settlement
-┌──────────────────────────────────▼─────────────────────────────────┐
-│  QkvgEscrow.sol (Base Mainnet)                                       │
-│  Treasury: 0x7e0118A33202c03949167853b05631baC0fA9756               │
-└─────────────────────────────────────────────────────────────────────┘
+Agent pays API fee (BNKR)
+    ├── 15%  → Referrer agent (the one who introduced this agent)
+    └── 85%  → Protocol operations (infrastructure, providers, treasury)
 ```
+
+**No referrer registered?** The referrer share rolls into protocol operations.
+
+**Why BNKR?** BNKR is the native currency of the Bankr AI agent ecosystem on Base — the fastest-growing AI agent financial network. Agents that already operate in the BNKR ecosystem integrate with zero friction.
 
 ---
 
-## Internal APIs — Core Infrastructure
+## Business Model — How the Numbers Work
 
-### 🔴 GRG: Distributed Data Protection Pipeline
-
-**The problem:** You're building on Akash, Filecoin, Storj, Arweave, or any distributed network. Nodes fail. Packets corrupt. Byzantine actors tamper. How do you guarantee your data survives?
-
-**The solution:** GRG is a 3-layer pipeline that makes data mathematically indestructible.
+Helm does **not receive payments from external API providers**. The model is:
 
 ```
-ENCODE:  Raw Data
-  → Golomb-Rice compression    (removes 30-60% redundancy, optimal for sparse AI outputs)
-  → RedStuff erasure coding    (splits into N shards — lose 50% of nodes, still reconstruct)
-  → Golay(24,12) FEC           (each shard self-corrects up to 3 bit errors per 24-bit word)
-  → Distributed Shards ✓
+External API (Anthropic, OpenAI, Brave, Pyth)
+    → Helm pays at wholesale/API rates (USD)
+    → Helm charges agents at retail rates (BNKR)
+    → Markup difference = protocol margin
 
-DECODE:  Any subset of shards (even after node failures)
-  → Golay error correction     (bit-level repair)
-  → RedStuff reconstruction    (erasure recovery from partial shards)
-  → Golomb decompression       (restore original)
-  → Original Data ✓
+Internal APIs (data encoding, stream cleaning, identity)
+    → Helm's own IP, no external cost
+    → 100% margin on every call
 ```
 
-**Modes:**
+**Where margin is highest:**
+- Semantic cache hits (Search, LLM) — 0% external cost, 100% protocol margin
+- Internal APIs (encoding, cleaning, identity) — no provider cost
+- Agent escrow settlement — 2% fee on amount settled, zero cost
 
-| Mode | Latency | Parity | Can Lose | Use Case |
-|------|---------|--------|----------|----------|
-| `turbo` | ~0.5ms | 0/1 | 0 nodes | Speed-critical, trusted network |
-| `safety` | ~1ms | 2/6 | 2 of 6 nodes | Standard distributed storage |
-| `rescue` | ~2ms | 2/4 | 50% nodes | Maximum fault tolerance |
+**The semantic cache multiplier:** When an agent queries something already in cache (G-score < 0.1), the external API is never called. Protocol collects the full fee at zero cost. Target: 70% cache hit rate on search/LLM traffic.
 
-**Where to plug in — exact target integrations:**
+---
 
-| Platform | Why GRG Fits | Integration Point |
-|----------|-------------|-------------------|
-| **Akash Network** | Spot compute nodes go offline unpredictably. Agents storing model weights or state need GRG to survive node churn. | Akash SDL deployment manifests; store shards across providers |
-| **Filecoin / Lotus** | Filecoin's storage deals don't guarantee retrieval within seconds. GRG encodes before sealing so partial-deal agents can still reconstruct. | Before `lotus client import` |
-| **Storj DCS** | Storj already uses erasure coding but charges per byte. GRG's Golomb compression reduces the bytes you pay for by 40-60% before upload. | Storj gateway-mt integration |
-| **Arweave / AR.IO** | Permanent storage at fixed cost. GRG ensures data isn't just stored but *verifiable* via Golay FEC — detect tampering without downloading. | Bundlr/Irys upload pipeline |
-| **IPFS / Pinata** | IPFS pinning services go down. Store GRG shards across 3+ Pinata accounts — lose any two, still recover. | CID-based shard addressing |
-| **Celestia / EigenDA** | Data availability layers. GRG-encoded blobs are smaller (Golomb) and more recoverable. Reduces DA costs. | Blob submission pre-processing |
-| **Walrus (Sui)** | Walrus is already Red-stuff inspired. GRG adds the Golomb+Golay layers for AI-specific workloads. | Pre-encoding before Walrus write |
-| **Moltbook agent storage** | AI agents generating conversation logs, model outputs, training data — GRG protects agent memory. | Agent state serialization layer |
+## API Catalog
 
-**Endpoint: `POST /api/v1/grg/encode`**
+### Data Encoding & Protection
+
+**The problem:** AI agents generate persistent data — model states, conversation logs, training sets, agent memory. Storing this on distributed networks means nodes fail, connections drop, data corrupts. Standard storage doesn't guarantee reconstruction.
+
+**What this does:** Encodes data through a multi-stage pipeline before distribution, with enough redundancy that a significant fraction of storage nodes can disappear and the original data is still fully recoverable. On decode, the system reconstructs from whatever fragments are available.
+
+**Where agents use this:**
+
+| Network | Use Case |
+|---------|----------|
+| Akash Network | Persisting agent state across spot compute sessions |
+| Filecoin / Lotus | Pre-encoding before storage deals for guaranteed retrieval |
+| Storj DCS | Reducing storage costs via compression before upload |
+| Arweave / Irys | Permanent storage with tamper-detection |
+| IPFS / Pinata | Shard-based redundancy across multiple pin providers |
+| Celestia / EigenDA | Smaller DA blobs with higher redundancy |
+| Walrus (Sui) | Additional compression + correction layer |
+| Moltbook agents | Protecting agent memory and conversation state |
+
+**Endpoint: `POST /api/v1/data/encode`**
 ```json
 {
   "data": "<base64>",
-  "mode": "safety",
+  "protection_level": "standard",
   "agent_did": "did:helm:YOUR_DID",
   "referrer_did": "did:helm:REFERRER"
 }
@@ -179,164 +181,131 @@ DECODE:  Any subset of shards (even after node failures)
 **Response:**
 ```json
 {
-  "shards": [{"index": 0, "is_parity": false, "data": "<base64>", "golay_protected": true}, ...],
+  "fragments": [{"index": 0, "recoverable": true, "data": "<base64>"}, ...],
   "original_bytes": 1024,
-  "compressed_bytes": 612,
+  "encoded_bytes": 612,
   "compression_ratio": 1.67,
-  "min_shards_for_recovery": 4,
-  "total_shards": 6,
-  "golomb_m": 8,
+  "min_fragments_for_recovery": 4,
+  "total_fragments": 6,
+  "encoding_key": 8,
   "fee_charged": 500
 }
 ```
 
-**Endpoint: `POST /api/v1/grg/decode`**
+**Endpoint: `POST /api/v1/data/recover`**
 ```json
 {
-  "shards": [<any 4+ of the 6 shards>],
-  "mode": "safety",
-  "golomb_m": 8,
+  "fragments": [<any 4 of the 6 fragments>],
+  "encoding_key": 8,
   "agent_did": "did:helm:YOUR_DID"
 }
 ```
 
-**Fee:** 0.0005 BNKR per encode, 0.0005 BNKR per decode.
+**Fee:** 0.0005 BNKR per encode, 0.0005 BNKR per recover.
 
 ---
 
-### 🟡 QKV-G Attention — Semantic Gap Detection + Novelty Proof
+### Novelty Scoring & Content Filtering
 
-**The problem:** Your agent spends $0.02 calling GPT-4o for every query. 70% of those queries are semantically equivalent to something it already answered. You're burning money on duplicates.
+**The problem:** Agents spend money on LLM inference for every query, including ones that are semantically identical to previous queries. 70% of agent queries are near-duplicates.
 
-**The solution:** QKV-G runs in <1ms and measures how *orthogonal* a new query is to your agent's knowledge base. Only pay for genuinely new information.
+**What this does:** Scores incoming content against a knowledge base and returns a novelty metric. Low score = already known, return cached answer. High score = genuinely new, route to inference. Extreme score = off-topic or spam, drop.
 
-**The Goldilocks Zone algorithm:**
+**Pricing tiers based on novelty:**
 
 ```
-G < 0.1   →  DUPLICATE     Cache hit. Return instantly. Cost = base toll only.
-0.1≤G≤0.8 →  NOVEL INFO    New knowledge. Route to provider. Charge Novelty Premium.
-G > 0.8   →  SPAM/OFF-TOPIC Unrelated to topic cluster. Drop. No charge.
+Score < 0.1  → Duplicate. Base fee only (0.0001 BNKR).
+Score 0.1–0.8 → Novel. Base fee + novelty premium (proportional).
+Score > 0.8  → Off-topic. Filtered. No charge.
 ```
 
-**Two-Part Tariff pricing:**
-```
-Total fee = Base Toll (0.0001 BNKR, always) + Novelty Premium (G × 0.1 BNKR)
+Every response includes a **Novelty Proof** — a verifiable cryptographic attestation of *why* the score was assigned. Agents can independently verify the math; no trust in Helm required.
 
-G = 0.0 → 0.0001 BNKR  (pure duplicate, cache hit)
-G = 0.3 → 0.0301 BNKR  (partial novelty)
-G = 0.7 → 0.0701 BNKR  (high novelty, near max)
-G = 1.0 → 0.1001 BNKR  (completely new topic)
-```
+**Where agents use this:**
 
-**Proof of Novelty — Why agents trust the score:**
+| Platform | Use Case |
+|----------|----------|
+| Moltbook news agents | Filter 1000 outlets to unique stories before LLM processing |
+| ai16z / Eliza agents | Shared knowledge cache across multi-agent networks |
+| Virtuals Protocol | Route only novel queries to expensive inference |
+| Polymarket agents | Extract only market-moving signals from news |
+| RAG pipelines | Pre-filter before embedding to reduce vector DB bloat |
+| Trading signal bots | Isolate alpha signals from noise |
 
-Every response includes mathematical proof that the G-score wasn't fabricated:
-
-```http
-HTTP/1.1 200 OK
-X-G-Score: 0.72
-X-Reference-K: sha256("nearest existing document summary")
-X-Novelty-Proof: "vector 'fee reduction 90%' orthogonal to existing K cluster"
-X-Nearest-Doc-Hash: abc123def456...
-X-Orthogonal-Component: 0.694
-X-Computation-Hash: sha256(query_vector + k_hashes)
-```
-
-Agents can independently verify: hash the inputs, check the math. No trust required. This is what makes the gateway a *transparent oracle* rather than a black box.
-
-**Where to plug in:**
-
-| Platform | Why QKV-G Fits | Use Case |
-|----------|----------------|----------|
-| **Moltbook news agents** | 100 outlets publish the same story. G < 0.1 for 90% of them. Stop paying to tokenize duplicates. | Pre-LLM content filter |
-| **ai16z / Eliza agents** | Multi-agent networks where agents repeatedly query similar information. QKV-G shared cache pool. | Cross-agent knowledge dedup |
-| **Virtuals Protocol agents** | Agents earning through engagement need high-quality unique content. QKV-G routes only novel queries to expensive LLMs. | Cost optimization layer |
-| **Polymarket / prediction agents** | News events duplicate rapidly. Only novel facts affect market odds. | Signal extraction |
-| **RAG pipelines (LangChain, LlamaIndex)** | Before embedding + retrieval, filter out duplicates to reduce vector DB bloat. | Pre-ingestion filter |
-| **Any vLLM/Ollama deployment** | Self-hosted LLM proxy that skips inference when cache covers the query. | Inference cost reduction |
-| **Autonomous trading bots** | Filter news signals — only novel market-moving info reaches the decision layer. | Alpha signal isolation |
-
-**Endpoint: `POST /api/v1/attention`**
+**Endpoint: `POST /api/v1/filter`**
 ```json
 {
-  "query_vector": [0.1, -0.4, 0.9, ...],
-  "sequence_id": 42,
+  "content": "text or structured data",
   "agent_did": "did:helm:YOUR_DID"
 }
 ```
 **Response:**
 ```json
 {
-  "result": "gap_detected",
-  "g_metric": 0.72,
-  "interpretation": "NOVEL — 72% new information vs knowledge base",
-  "recommended_action": "accept_and_charge",
-  "price_quote": {
-    "base_toll_bnkr": 0.0001,
+  "novelty_score": 0.72,
+  "verdict": "novel",
+  "recommended_action": "process",
+  "price_breakdown": {
+    "base_fee_bnkr": 0.0001,
     "novelty_premium_bnkr": 0.0720,
-    "total_bnkr": 0.0721,
-    "tier": "STANDARD"
+    "total_bnkr": 0.0721
   },
   "novelty_proof": {
-    "g_score": 0.72,
-    "nearest_doc_hash": "abc123...",
-    "orthogonal_component": 0.694,
-    "novelty_reason": "New token 'fee reduction 90%' orthogonal to existing cluster",
+    "score": 0.72,
+    "nearest_reference_hash": "abc123...",
+    "orthogonal_ratio": 0.694,
     "computation_hash": "def789..."
   }
 }
 ```
 
-**Fee:** 0.001 BNKR per query + novelty premium.
-
 ---
 
-### 🟢 Agent Identity — DID Registration + Reputation (D-Front)
+### Agent Identity & Reputation
 
-**The problem:** In a trustless multi-agent network, how does Agent A know if Agent B is reliable before paying it 10 BNKR to run a computation?
+**The problem:** In a trustless multi-agent economy, how does Agent A decide whether to pay Agent B before receiving the work?
 
-**The solution:** Helm is Web3's FICO score for AI agents. A single DID lookup returns a composite trust score across 5 verified categories — computed from on-chain history, not self-reported.
+**What this does:** Provides a composite trust score for any Helm agent based on verified on-chain behavior across five categories. One lookup answers: *"Should I trust this counterpart?"*
 
 **Reputation categories:**
 
-| Category | Weight | How Measured |
-|----------|--------|--------------|
-| Reliability | 30% | Task completion rate (on-chain settlement ratio) |
-| Honesty | 25% | Verified claims vs outcomes |
-| Quality | 25% | Peer review scores from verifier agents |
-| Speed | 10% | Response latency vs network median |
-| Uptime | 10% | Heartbeat availability |
+| Category | Weight |
+|----------|--------|
+| Reliability (task completion rate) | 30% |
+| Honesty (verified claim accuracy) | 25% |
+| Quality (peer review scores) | 25% |
+| Speed (vs network median) | 10% |
+| Uptime (availability) | 10% |
 
-Time-decay pulls scores toward neutral over time — stale reputation doesn't persist.
+Scores decay toward neutral over time — stale reputation doesn't persist.
 
-**Where to plug in:**
+**Where agents use this:**
 
-| Platform | Why Agent Identity Fits | Integration Point |
-|----------|------------------------|-------------------|
-| **Any DeFi lending to agents** | Before lending BNKR/ETH to an agent, query its reputation score. Set credit limits by score. | Loan origination check |
-| **Virtuals / ai16z agent hiring** | Multi-agent orchestrators selecting which sub-agent to delegate a task to. Route to highest reputation. | Agent selection logic |
-| **Moltbook trust network** | Human users selecting which AI financial advisor to follow. Show reputation badge. | Profile display |
-| **DEX protocols with agent market-makers** | Verify agent counterparty before accepting liquidity provision. Fraud prevention. | Pre-trade check |
-| **Akash provider selection** | Choose which Akash compute provider to deploy your agent on based on their Helm reputation. | Deployment decision |
-| **Cross-chain agent contracts (Base/Solana/Sui)** | Any smart contract that needs to verify an agent's behavior history before releasing funds. | ERC-8004 compatible |
-| **Insurance protocols** | Premium pricing based on agent reliability score. High reputation = lower premium. | Underwriting input |
+| Platform | Use Case |
+|----------|----------|
+| DeFi lending to agents | Credit limit based on reputation score |
+| Virtuals / ai16z orchestration | Select highest-reputation sub-agent for task |
+| DEX agent market-makers | Verify counterpart before accepting liquidity |
+| Akash provider selection | Choose compute provider by Helm reputation |
+| Cross-chain contracts | Verify agent behavior history before releasing funds |
+| Insurance protocols | Premium pricing by reliability score |
 
-**Register DID: `POST /api/v1/agent/register`**
+**Register: `POST /api/v1/agent/register`**
 ```json
 {
-  "agent_id": "my-trading-bot-001",
-  "capabilities": ["compute", "storage", "defi"],
-  "referrer_did": "did:helm:WHO_INTRODUCED_YOU"
+  "agent_id": "my-agent-001",
+  "capabilities": ["compute", "defi"],
+  "referrer_did": "did:helm:YOUR_REFERRER"
 }
 ```
 Fee: **0.001 ETH** (one-time, Base Mainnet)
 
-**Query reputation: `GET /api/v1/agent/{did}`**
+**Query: `GET /api/v1/agent/{did}`**
 ```json
 {
   "did": "did:helm:abc123",
   "reputation": {
-    "composite_score": 0.847,
+    "composite": 0.847,
     "reliability": 0.92,
     "honesty": 0.88,
     "quality": 0.81,
@@ -344,55 +313,43 @@ Fee: **0.001 ETH** (one-time, Base Mainnet)
     "uptime": 0.93
   },
   "is_online": true,
-  "capabilities": ["compute", "defi"],
   "fee_charged": 200
 }
 ```
 
-**External identity query: `GET /api/v1/identity/external/{did}`**
-For non-Helm systems querying Helm agent reputation. Fee: 0.0005 BNKR.
-
 ---
 
-### 🔵 Sync-O Stream Cleaner — 5-Stage Deduplication
+### Stream Deduplication
 
-**The problem:** Your agent ingests 50,000 items/day from RSS feeds, Twitter/X, Telegram, Discord. 73% is duplicate, HTML garbage, spam, or bot-generated noise. You're paying LLM tokenization costs on junk.
+**The problem:** Feed ingestion agents process tens of thousands of items per day. Most are HTML-wrapped duplicates, reposts, or bot-generated spam that costs money to tokenize.
 
-**The solution:** Sync-O runs a 5-stage pipeline in <5ms/batch, drops garbage before it hits anything expensive.
+**What this does:** 5-stage pipeline — length filter, markup removal, whitespace normalization, pattern detection, hash-based exact deduplication. Runs at <5ms per batch. Only clean, unique items pass through.
 
-**5 stages:**
-1. **Length filter** — Drop items >5,000 chars (long-string injection attacks, base64 embedded payloads)
-2. **HTML stripping** — `<div>`, `<script>`, `<style>` removal
-3. **Whitespace normalization** — Collapse duplicate spaces, normalize Unicode
-4. **Spam pattern filter** — Hot-reloadable regex from OpenClaw moderator (no restart needed)
-5. **XXH3 deduplication** — 64-bit hash sliding window (50k items) — instant exact dedup
+**Where agents use this:**
 
-**Where to plug in:**
+| Platform | Use Case |
+|----------|----------|
+| Moltbook feed ingestion | Kill duplicates before novelty scoring |
+| Telegram / Discord bots | Forward only unique messages to LLM |
+| RSS aggregators | Remove reposts across 1000+ feeds |
+| Twitter/X scrapers | Dedup retweets and quote-tweets |
+| Agent training pipelines | Clean web data before fine-tuning |
 
-| Platform | Why Sync-O Fits | Integration Point |
-|----------|----------------|-------------------|
-| **Moltbook feed ingestion** | News crawlers pulling from 1000 sources. Same story from 50 outlets. Sync-O kills 90% of duplicates before QKV-G even runs. | Pre-ingestion pipeline |
-| **Telegram/Discord bots** | Group chats with high message velocity. Forward-only unique messages to LLM processing. | Message handler middleware |
-| **RSS aggregator agents** | Any agent reading multiple feeds (CoinDesk, CoinTelegraph, Decrypt). Dedup before summarization. | Feed parsing layer |
-| **Twitter/X scraping agents** | Retweets, quote tweets, similar threads flood the pipeline. XXH3 dedup catches them all. | Before embedding |
-| **Agent training data pipelines** | Cleaning web-scraped datasets before fine-tuning. Remove duplicates, strip HTML. | ETL preprocessing |
-| **Multi-agent shared memory** | Agents writing to shared CRDT store — deduplicate writes before they reach Merkle-CRDT. | Write-ahead filter |
-
-**Endpoint: `POST /api/v1/clean`**
+**Endpoint: `POST /api/v1/stream/clean`**
 ```json
 {
-  "stream_data": ["raw item 1", "<div>HTML junk</div>", "BUY CRYPTO NOW!!!", "raw item 1"],
+  "items": ["item 1", "<div>HTML</div>", "BUY NOW!!!", "item 1"],
   "agent_did": "did:helm:YOUR_DID"
 }
 ```
 **Response:**
 ```json
 {
-  "clean_data": ["raw item 1"],
+  "clean_items": ["item 1"],
   "original_count": 4,
   "dropped_count": 3,
-  "processing_ns": 4523891,
-  "drop_reasons": {"duplicate": 1, "spam": 1, "html": 1}
+  "drop_breakdown": {"duplicate": 1, "spam": 1, "markup": 1},
+  "processing_ns": 4523891
 }
 ```
 **Fee:** 0.0001 BNKR per 1,000 items.
@@ -401,71 +358,64 @@ For non-Helm systems querying Helm agent reputation. Fee: 0.0005 BNKR.
 
 ## External APIs — A/B/C/D Fronts
 
-### A-Front: AI Inference Proxy (LLM Broker)
+### A-Front: AI Inference
 
-**The problem:** Every agent needs inference. Managing API keys for Claude, GPT-4o, and open-source models across a fleet of 100 agents is an operational nightmare. Rate limits hit unpredictably.
+**Business model:** Wholesale API access → retail BNKR billing. Helm routes to the cheapest available provider for each model. As network volume grows, enterprise pricing reduces per-call cost below individual developer rates.
 
-**The solution:** One DID, one BNKR deposit, access to all frontier LLMs. The gateway handles key rotation, rate limit routing, and failover. As Helm network traffic volume scales, wholesale enterprise pricing eventually undercuts individual developer retail.
+**What agents pay vs. what Helm pays:**
 
-**Supported models:** `claude-opus-4-6`, `claude-sonnet-4-6`, `gpt-4o`, `gpt-4o-mini`, `gpt-4-turbo`, and any OpenAI-compatible vLLM endpoint.
+| Model | Helm Charges | Cost to Helm | Margin |
+|-------|-------------|-------------|--------|
+| claude-sonnet-4-6 | market rate + 5% | Anthropic wholesale | 5%+ |
+| gpt-4o | market rate + 5% | OpenAI wholesale | 5%+ |
+| Cache hit (any model) | 0.001 BNKR base fee | $0 | 100% |
 
-**Routing logic:**
-- Model name starts with `gpt-*` → OpenAI
-- Model name starts with `claude-*` → Anthropic
-- Custom endpoint in request → vLLM proxy
-- No model specified → `claude-sonnet-4-6` (default)
+**Where agents use this:**
 
-**Where to plug in:**
-
-| Platform | Why A-Front Fits | Use Case |
-|----------|-----------------|----------|
-| **Virtuals Protocol agents** | Every Virtuals agent needs inference. Consolidate billing. | Agent backbone LLM |
-| **Eliza (ai16z) framework** | Multi-agent orchestration needs fast, cheap inference. A-Front's semantic cache prevents redundant LLM calls. | Character inference |
-| **AutoGPT / BabyAGI forks** | Agentic loops call LLM dozens of times per task. QKV-G cache cuts 70% of calls. | Task loop inference |
-| **Cursor / Windsurf AI IDE** | Developer tools needing code completion via MCP. | Code generation |
-| **Discord/Telegram AI bots** | High-volume chatbots needing cost-controlled inference. | Chat response generation |
-| **Moltbook writer agents** | Agents producing content at scale need per-token cost optimization. | Content generation |
+| Platform | Use Case |
+|----------|----------|
+| Virtuals Protocol agents | Agent backbone inference |
+| Eliza (ai16z) framework | Character and reasoning inference |
+| AutoGPT / agentic loops | Task planning with 70% cache reduction |
+| Cursor / Windsurf | Code generation via MCP |
+| Moltbook writer agents | Content generation at scale |
 
 **Endpoint: `POST /api/v1/llm`**
 ```json
 {
   "model": "claude-sonnet-4-6",
-  "prompt": "Analyze this on-chain data...",
+  "prompt": "...",
   "max_tokens": 1000,
   "agent_did": "did:helm:YOUR_DID",
   "referrer_did": "did:helm:REFERRER"
 }
 ```
-**Fee:** Provider cost + 5% markup. Deducted from BNKR deposit.
+**Fee:** Provider cost + 5% markup, billed in BNKR.
 
 ---
 
-### B-Front: Search & Web Data Proxy
+### B-Front: Web Search
 
-**The problem:** Brave Search costs $5/1000 queries. Agents querying "bitcoin price today" 10,000 times/day spend $50/day on the same answer.
+**Business model:** Brave Search API at cost → cached semantic layer on top → cache hits billed at base fee only. Cache misses billed at Brave cost + 10%.
 
-**The solution:** Brave Search with QKV-G semantic cache. G < 0.1 = cache hit = cost $0, margin 100%. G ≥ 0.1 = call Brave = cache the result for the next agent. Every cache hit from the 2nd agent onward is pure profit.
-
-**Cache hit math:**
+**The cache economics:**
 ```
-Day 1: 10,000 queries on BTC price
-  → First query hits Brave ($0.005 cost), cached
-  → Remaining 9,999 queries hit cache ($0 cost)
-  → Revenue: 10,000 × 0.0055 BNKR = 55 BNKR
-  → Cost: 0.005 Brave API cost
-  → Margin: ~99.99%
+10,000 search queries on same topic (e.g., "BTC price")
+  → Query 1: hits Brave API ($0.005 cost), cached
+  → Queries 2–10,000: cache hit, $0 Brave cost
+  → Protocol collects base fee on all 10,000
+  → Net margin on queries 2–10,000: 100%
 ```
 
-**Where to plug in:**
+**Where agents use this:**
 
-| Platform | Why B-Front Fits | Use Case |
-|----------|-----------------|----------|
-| **Moltbook news agents** | Agents crawling crypto, AI, and tech news. Identical queries from multiple agents → cache pool. | Real-time news aggregation |
-| **Prediction market agents (Polymarket, Manifold)** | Need current events fast. B-Front delivers cached current events instantly. | Event resolution research |
-| **Trading signal agents** | Web search for news sentiment before trade execution. | Pre-trade news check |
-| **Research assistants (Perplexity-style)** | Agents that need web grounding for answers. Cache reduces latency to <50ms on repeat topics. | Knowledge augmentation |
-| **DeFi due diligence agents** | Searching for project audits, team backgrounds, exploit history. | Risk assessment |
-| **Eliza / character.ai agents** | Agents that browse the web as part of their persona. | Web browsing capability |
+| Platform | Use Case |
+|----------|----------|
+| Moltbook news agents | Current events aggregation with dedup |
+| Prediction market agents | Event resolution research |
+| Trading signal agents | Pre-trade news sentiment |
+| Research assistants | Web grounding for answers |
+| DeFi due diligence | Project audit / exploit history research |
 
 **Endpoint: `POST /api/v1/search`**
 ```json
@@ -475,39 +425,31 @@ Day 1: 10,000 queries on BTC price
   "agent_did": "did:helm:YOUR_DID"
 }
 ```
-**Fee:** Brave cost + 10% markup. Cache hits charged at base toll only (0.0001 BNKR).
+**Fee:** Brave cost + 10% on cache miss. Base fee only on cache hit.
 
 ---
 
-### C-Front: DeFi & Price Oracle (MEV-Protected)
+### C-Front: DeFi Price Oracle
 
-**The problem:** Price data is the most valuable and most dangerous data in DeFi. A stale price causes failed swaps, liquidations, and MEV extraction. Agents using single-source oracles get manipulated.
+**Business model:** Pyth Network (free, millisecond-fresh) + CoinGecko (15s-fresh) aggregated to median. Billed at flat 0.001 BNKR. Never cached — MEV protection is the value proposition.
 
-**The solution:** Multi-oracle aggregation (Pyth Network + CoinGecko) with median computation. **Never cached.** Every call fetches fresh data from both sources simultaneously. MEV bots can't front-run agents through this proxy because the price is already aggregated before routing to the DEX.
+**Why agents pay for this instead of calling Pyth directly:**
+- Single endpoint covers all major tokens
+- Manipulation-resistant median (single source can be spoofed)
+- Helm handles API key management across multiple providers
+- Timestamp validation — stale data rejected before delivery
 
-**Oracle logic:**
-```
-Parallel fetch: Pyth (ms-fresh) + CoinGecko (15s-fresh)
-Median computation → manipulation-resistant price
-Timestamp check → reject if both stale > 30s
-Response → includes source breakdown for verification
-```
+**Where agents use this:**
 
-**Where to plug in:**
+| Platform | Use Case |
+|----------|----------|
+| Uniswap / Aerodrome Base | Pre-swap slippage calculation |
+| Aave / Compound agents | Collateral ratio monitoring |
+| Hyperliquid perp agents | Real-time mark price |
+| Treasury management DAOs | Automated rebalancing triggers |
+| Yield aggregators | APY comparison across protocols |
 
-| Platform | Why C-Front Fits | Use Case |
-|----------|-----------------|----------|
-| **Uniswap / Aerodrome on Base** | Agents executing swaps need accurate pre-trade price for slippage calculation. | Pre-swap price check |
-| **Aave / Compound agents** | Lending/borrowing agents checking collateral ratios. Stale price = liquidation risk. | Collateral monitoring |
-| **Jupiter (Solana)** | Cross-chain agents routing swaps via Jupiter need accurate price comparison. | Route optimization |
-| **Hyperliquid perp agents** | Perp trading agents need real-time mark price. | Position management |
-| **Treasury management DAOs** | Automated treasury rebalancing based on asset prices. | Rebalancing trigger |
-| **Yield aggregators (Yearn-style)** | APY comparison across protocols needs correct underlying asset prices. | Strategy comparison |
-| **Any Helm agent doing DeFi** | Automatic for any agent calling DeFi functions through the gateway. | Native integration |
-
-**Supported tokens:** ETH, BTC, SOL, USDC, BNKR (and any token listed on both Pyth + CoinGecko)
-
-**Endpoint: `POST /api/v1/defi`**
+**Endpoint: `POST /api/v1/defi/price`**
 ```json
 {"token": "ETH", "agent_did": "did:helm:YOUR_DID"}
 ```
@@ -519,31 +461,26 @@ Response → includes source breakdown for verification
   "sources": {"pyth": 3240.12, "coingecko": 3243.62},
   "median": 3241.87,
   "cached": false,
-  "timestamp_ms": 1740400123456,
   "staleness_ms": 800
 }
 ```
-**Fee:** 0.001 BNKR per query. Never cached (security requirement).
+**Fee:** 0.001 BNKR per query. Never cached.
 
 ---
 
-### D-Front: Cross-Chain Identity & Reputation
+### D-Front: Cross-Chain Identity
 
-**The problem:** Helm agents have on-chain reputation. But agents on Solana, Sui, or Ethereum don't natively speak the Helm DID format. External protocols can't verify Helm agent behavior without a bridge.
+**Business model:** Helm agent reputation is computed internally. External chains and protocols pay per query to access it. Every ecosystem integration that queries Helm reputation generates passive revenue.
 
-**The solution:** D-Front is the external-facing reputation API. Any protocol on any chain can query a Helm agent's trust score via REST, without running a Helm node.
+**Where agents use this:**
 
-**Where to plug in:**
-
-| Platform | Why D-Front Fits | Use Case |
-|----------|-----------------|----------|
-| **ERC-4337 Smart Account agents** | Account abstraction wallets that need to verify transaction counterpart reputation. | Pre-transaction trust check |
-| **Gnosis Safe modules** | Multi-sig DAOs wanting to gate approvals by agent reputation. | Proposal filter |
-| **LayerZero cross-chain messages** | Verify the sending agent's reputation before executing cross-chain instruction. | Message validation |
-| **Wormhole guardian verification** | Optional reputation layer on top of Wormhole relayer identity. | Relayer quality scoring |
-| **Farcaster / Lens social agents** | External AI accounts on social media. Third parties can check if an AI is "Helm-verified". | Social trust badge |
-| **Agent marketplaces (e.g., Fetch.ai, Ocean Protocol)** | Agents listed for hire. Reputation is the primary selection signal. | Agent hiring |
-| **Insurance protocols** | Premium discounts for high-reputation agents. Automated underwriting. | Risk pricing |
+| Platform | Use Case |
+|----------|----------|
+| ERC-4337 smart accounts | Verify counterpart before transaction |
+| LayerZero cross-chain | Validate sending agent before execution |
+| Farcaster / Lens | Third-party AI account trust badge |
+| Agent marketplaces (Fetch.ai, Ocean) | Reputation as hiring signal |
+| Insurance protocols | Automated underwriting by reliability score |
 
 **Fee:** 0.0005 BNKR per external query.
 
@@ -551,117 +488,114 @@ Response → includes source breakdown for verification
 
 ## Agent-to-Agent Escrow
 
-Trustless payment between any two agents for completed work.
+Trustless payment between any two agents. No human intermediary.
 
 ```
-Agent A (payer) creates escrow → locks BNKR
+Agent A (payer) locks BNKR in escrow
     ↓
-Agent B (payee) delivers work
+Agent B delivers work
     ↓
 Gateway verifies delivery
     ↓
-2% fee → treasury | 98% net → Agent B
+2% settlement fee deducted → 98% net to Agent B
 ```
 
-**Create: `POST /api/v1/escrow/create`**
-```json
-{
-  "payee_did": "did:helm:worker-agent",
-  "bnkr_amount": 10.0,
-  "ttl_seconds": 86400
-}
-```
+**`POST /api/v1/escrow/create`** — Lock funds before delegating task  
+**`POST /api/v1/escrow/settle/{id}`** — Release on verified delivery  
+**`POST /api/v1/escrow/refund/{id}`** — Reclaim after TTL expires  
 
-**Settle: `POST /api/v1/escrow/settle/{escrow_id}`** (gateway only, after verifying delivery)
-
-**Refund: `POST /api/v1/escrow/refund/{escrow_id}`** (after TTL expires, payer calls)
-
-**Where to plug in:**
-
-| Use Case | How |
-|----------|-----|
-| Agent hires agent for computation | Payer creates escrow before delegating task |
-| Data marketplace (raw → clean) | Buyer locks funds; seller delivers GRG-encoded dataset; gateway verifies hash |
-| Bounty system | Anyone creates escrow; first agent to solve claims via settlement |
-| Subscription service | Recurring escrows for ongoing agent services |
+**Use cases:** Agent hiring agent for compute · Data marketplace · Bounty systems · Subscription services
 
 ---
 
-## Security: Kaleidoscope Stream Protection
+## Fee Schedule
 
-All P2P and HTTP connections pass through the Kaleidoscope interceptor — a stream wrapper implementing WhatsApp's 3-principle security philosophy.
+| API | Fee | Referral Earned |
+|-----|-----|-----------------|
+| DID registration | 0.001 ETH (one-time) | — |
+| Agent escrow settlement | 2% of amount | 15% of fee |
+| Staking yield | 10% protocol cut | — |
+| Data encode | 0.0005 BNKR | 0.000075 BNKR |
+| Data recover | 0.0005 BNKR | 0.000075 BNKR |
+| Content filter | 0.001 BNKR + novelty premium | 15% of total |
+| Stream clean | 0.0001 BNKR/1k | 15% of total |
+| Agent reputation query | 0.0002 BNKR | 0.00003 BNKR |
+| LLM inference | provider cost + 5% | 15% of total |
+| Web search (cache miss) | Brave cost + 10% | 15% of total |
+| Web search (cache hit) | 0.0001 BNKR | 0.000015 BNKR |
+| DeFi oracle | 0.001 BNKR | 0.00015 BNKR |
+| External identity query | 0.0005 BNKR | 0.000075 BNKR |
 
-```rust
-// Every incoming connection:
-SafeStream::new(
-    stream,
-    KaleidoscopePolicy {
-        max_payload_bytes: 2 * 1024 * 1024,  // 2MB hard limit
-        read_timeout_secs: 3,                  // Slowloris protection
-        min_bytes_per_sec: 1024,               // Minimum transfer rate
-    }
-)
-```
-
-**What this stops:**
-- **Memory exhaustion attacks** — 10GB payloads cut off at 2MB
-- **Slowloris attacks** — 1-byte-per-second connections terminated at 3 seconds
-- **Zombie connections** — Dead connections cleared within ping timeout
-- **Stream flooding** — Maximum 32 concurrent streams per peer
+**Referrer column = what YOU earn every time an agent you introduced makes this call.**
 
 ---
 
-## Payment Architecture: x402 Off-Chain Tickets
+## Payment Architecture
 
-Zero gas per API call. Ever.
+Zero gas per API call.
 
 ```
-Phase 1: DEPOSIT (one gas transaction, Base Mainnet)
-  Agent → QkvgEscrow.depositBnkr(amount)
+Phase 1: DEPOSIT  (one on-chain transaction)
+  Agent deposits BNKR into escrow contract
 
-Phase 2: API CALLS (off-chain, <10ms)
+Phase 2: API CALLS  (off-chain, <10ms each)
   Agent calls API
-  Gateway deducts from internal BNKR ledger
-  Off-chain signed ticket queued for batch
+  Gateway deducts from internal ledger
+  Signed ticket queued for batch settlement
 
-Phase 3: DAILY SETTLEMENT (one gas transaction per day)
+Phase 3: DAILY SETTLEMENT  (one on-chain transaction per day)
   Gateway batches 24h of tickets
-  Single Merkle proof submitted to QkvgEscrow.settleDaily()
-  Treasury receives 85% of all API revenue
+  Single Merkle proof settled on-chain
+  Referrer earnings distributed
 ```
-
-**Fee split per call:**
-```
-Total API fee
-  ├── 85% → 0x7e0118A33202c03949167853b05631baC0fA9756 (treasury)
-  └── 15% → referrer agent DID (claimable via /api/v1/referrer/claim)
-```
-
-**Free tier logic:**
-- First 100 calls per DID: no BNKR charged
-- Referral bonus: introduce an agent who makes their first API call → +100 free calls for both parties
-- Referral tracking: on-chain via `QkvgEscrow.referrer[agent]`
 
 ---
 
-## Complete Fee Schedule
+## Endpoints Reference
 
-| Source | Rate | Destination |
-|--------|------|-------------|
-| DID registration | 0.001 ETH (flat) | 100% treasury |
-| Agent escrow settlement | 2% of amount | 100% treasury |
-| Staking yield protocol cut | 10% of epoch yield | 100% treasury |
-| GRG encode | 0.0005 BNKR | 85/15 split |
-| GRG decode | 0.0005 BNKR | 85/15 split |
-| QKV-G attention | 0.001 BNKR + novelty premium | 85/15 split |
-| Sync-O clean | 0.0001 BNKR per 1k items | 85/15 split |
-| A-Front LLM | provider cost + 5% | 85/15 split |
-| B-Front search (cache miss) | Brave cost + 10% | 85/15 split |
-| B-Front search (cache hit) | 0.0001 BNKR base toll | 85/15 split |
-| C-Front DeFi oracle | 0.001 BNKR | 85/15 split |
-| D-Front external identity | 0.0005 BNKR | 85/15 split |
+| Method | Path | Description | Fee |
+|--------|------|-------------|-----|
+| `POST` | `/api/v1/data/encode` | Fault-tolerant multi-fragment encoding | 0.0005 BNKR |
+| `POST` | `/api/v1/data/recover` | Reconstruct original from partial fragments | 0.0005 BNKR |
+| `POST` | `/api/v1/filter` | Novelty scoring with verifiable proof | 0.001+ BNKR |
+| `POST` | `/api/v1/stream/clean` | 5-stage deduplication pipeline | 0.0001/1k |
+| `GET`  | `/api/v1/agent/{did}` | Agent reputation composite score | 0.0002 BNKR |
+| `POST` | `/api/v1/agent/register` | Register DID with referral tracking | 0.001 ETH |
+| `POST` | `/api/v1/llm` | Multi-model inference routing | cost+5% |
+| `POST` | `/api/v1/search` | Semantic-cached web search | cost+10% |
+| `POST` | `/api/v1/defi/price` | MEV-resistant multi-oracle price | 0.001 BNKR |
+| `GET`  | `/api/v1/identity/external/{did}` | Cross-chain reputation query | 0.0005 BNKR |
+| `POST` | `/api/v1/escrow/create` | Lock BNKR for agent-to-agent work | — |
+| `POST` | `/api/v1/escrow/settle/{id}` | Release escrow on verified delivery | 2% |
+| `POST` | `/api/v1/escrow/refund/{id}` | Reclaim expired escrow | — |
+| `POST` | `/api/v1/referrer/claim` | Withdraw accumulated referral earnings | — |
+| `POST` | `/mcp` | MCP JSON-RPC 2.0 server endpoint | varies |
+| `GET`  | `/api/v1/billing/summary` | Usage and earnings dashboard | free |
+| `GET`  | `/health` | Service health check | free |
 
-**Referrer earns 15% of every API fee generated by agents they introduced.**
+---
+
+## Ecosystem Fit
+
+```
+Distributed Storage      AI Inference          DeFi
+─────────────────────    ────────────          ──────────────────
+Akash Network   ←[enc]   Claude        ←[A]    Uniswap Base  ←[C]
+Filecoin        ←[enc]   GPT-4o        ←[A]    Aerodrome     ←[C]
+Storj DCS       ←[enc]   Cursor IDE    ←[MCP]  Aave Base     ←[C]
+Arweave/Irys    ←[enc]   Claude App    ←[MCP]  Hyperliquid   ←[C]
+IPFS/Pinata     ←[enc]                          
+Celestia        ←[enc]   Agent Networks        Identity
+Walrus (Sui)    ←[enc]   ──────────────        ─────────────────
+                         Moltbook      ←[B,f]  ERC-4337      ←[D]
+Search / Intel           Virtuals      ←[A,f]  LayerZero     ←[D]
+─────────────────────    ai16z/Eliza   ←[A,B]  Farcaster     ←[D]
+Brave Search    ←[B]     VaderAI       ←[C,D]  Gnosis Safe   ←[D]
+RSS agents      ←[B]     Polymarket    ←[B,C]  Fetch.ai      ←[D]
+RAG pipelines   ←[f]     AutoGPT       ←[A,f]  Ocean Proto   ←[D]
+```
+
+`[enc]` data encoding · `[f]` novelty filter · `[A]` inference · `[B]` search · `[C]` DeFi · `[D]` identity
 
 ---
 
@@ -669,69 +603,17 @@ Total API fee
 
 | Contract | Address |
 |----------|---------|
-| QkvgEscrow (v2) | *deploy pending — see below* |
+| QkvgEscrow (v2) | *deploy pending* |
 | BNKR Token | `0x22af33fe49fd1fa80c7149773dde5890d3c76f3b` |
-| Helm Treasury | `0x7e0118A33202c03949167853b05631baC0fA9756` |
 
-**Deploy QkvgEscrow v2:**
-1. Open [Remix](https://remix.ethereum.org)
-2. Paste `contracts/QkvgEscrow.sol`
-3. Compile → Deploy on Base Mainnet
-4. Constructor: `_gateway=<GCP_IP>`, `_bnkrToken=0x22af33fe49fd1fa80c7149773dde5890d3c76f3b`, `_yieldProtocol=0x0000000000000000000000000000000000000000`
-5. Gas required: ~$1-2 in Base ETH
-
----
-
-## Complete Endpoints Reference
-
-| Method | Path | Description | Fee |
-|--------|------|-------------|-----|
-| `POST` | `/api/v1/grg/encode` | Golomb+RedStuff+Golay encode | 0.0005 BNKR |
-| `POST` | `/api/v1/grg/decode` | Reconstruct from partial shards | 0.0005 BNKR |
-| `POST` | `/api/v1/attention` | QKV-G gap detection + Novelty Proof | 0.001 BNKR |
-| `POST` | `/api/v1/clean` | Sync-O 5-stage stream clean | 0.0001/1k |
-| `GET`  | `/api/v1/agent/{did}` | Reputation score lookup | 0.0002 BNKR |
-| `POST` | `/api/v1/agent/register` | Register DID + referrer | 0.001 ETH |
-| `POST` | `/api/v1/llm` | LLM inference proxy (A-Front) | cost+5% |
-| `POST` | `/api/v1/search` | Web search + semantic cache (B-Front) | cost+10% |
-| `POST` | `/api/v1/defi` | Multi-oracle price feed (C-Front) | 0.001 BNKR |
-| `GET`  | `/api/v1/identity/external/{did}` | Cross-chain identity query (D-Front) | 0.0005 BNKR |
-| `POST` | `/api/v1/escrow/create` | Create A2A escrow | — |
-| `POST` | `/api/v1/escrow/settle/{id}` | Settle escrow | 2% |
-| `POST` | `/api/v1/escrow/refund/{id}` | Refund expired escrow | — |
-| `GET`  | `/api/v1/referrer/claim` | Claim 15% referrer earnings | — |
-| `POST` | `/mcp` | MCP JSON-RPC 2.0 (all tools) | varies |
-| `GET`  | `/api/v1/billing/summary` | Usage + revenue stats | free |
-| `GET`  | `/health` | Gateway health check | free |
-
----
-
-## Ecosystem Integration Map
-
-```
-Distributed Storage          AI Inference           DeFi
-────────────────────         ─────────────          ────────────────
-Akash Network       ←[GRG]   Claude Sonnet ←[A]    Uniswap Base  ←[C]
-Filecoin/Lotus      ←[GRG]   GPT-4o        ←[A]    Aerodrome     ←[C]
-Storj DCS           ←[GRG]   vLLM/Ollama   ←[A]    Aave Base     ←[C]
-Arweave/Irys        ←[GRG]   Cursor IDE    ←[MCP]  Hyperliquid   ←[C]
-IPFS/Pinata         ←[GRG]   Claude App    ←[MCP]  Jupiter       ←[C]
-Celestia            ←[GRG]                          
-Walrus (Sui)        ←[GRG]   Social / Agents        Identity
-                             ──────────────          ────────────────
-Knowledge / Search           Moltbook      ←[B,QKV] ERC-4337      ←[D]
-────────────────────         Virtuals      ←[A,QKV] LayerZero     ←[D]
-Brave Search        ←[B]    ai16z/Eliza   ←[A,B]  Farcaster     ←[D]
-RSS/Feed agents     ←[B]    VaderAI       ←[C,D]  Gnosis Safe   ←[D]
-Prediction markets  ←[B]    Polymarket    ←[B,C]  Fetch.ai      ←[D]
-RAG pipelines       ←[QKV]  AutoGPT forks ←[A,QKV] Ocean Proto  ←[D]
-```
+**Deploy escrow:**
+1. [Remix IDE](https://remix.ethereum.org) → paste `contracts/QkvgEscrow.sol`
+2. Constructor: `_gateway=<GCP_IP>`, `_bnkrToken=0x22af33fe49fd1fa80c7149773dde5890d3c76f3b`, `_yieldProtocol=0x0000000000000000000000000000000000000000`
+3. Network: Base Mainnet, ~$1–2 in Base ETH for gas
 
 ---
 
 ## License
 
-The **Helm Gateway** (this repository) is open source under MIT.  
-The **Helm Core engine** (`Helm-Protocol/Helm`) is proprietary and closed source.  
-Proprietary IP: QKV-G attention kernel, GRG pipeline, Socratic Claw, Agent Womb, Kaleidoscope security layer.  
-Access to core functionality is exclusively through this gateway's API endpoints.
+**Helm Gateway** (this repository) — MIT open source.  
+**Helm Core engine** — Proprietary, accessed exclusively through this gateway's API.
