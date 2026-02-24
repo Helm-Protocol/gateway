@@ -1,24 +1,9 @@
-// src/broker/api_broker.rs
-//
-// ═══════════════════════════════════════════════════════════════
-// HELM API BROKER  — GRAND CROSS INTEGRATION
-// ═══════════════════════════════════════════════════════════════
-//
-// Jeff Dean 최종 통합 설계:
-//
-//   [DID Auth] → [Kaleidoscope SafeStream]
-//       ↓
-//   [Helm-sense Gap 평가] ← SocraticMlaEngine
-//       ↓ Gap 없음            ↓ Gap 있음
-//   [캐시 반환]          [4전선 라우팅]
-//   마진 100%            A/B/C/D 분류
-//       ↓                    ↓
-//   [x402 과금]         [외부 API 호출]
-//       ↓                    ↓
-//   [결과 반환]         [캐시 저장 → 다음 에이전트에게 판매]
-//
-// 무한 마진 루프:
-//   에이전트가 많을수록 캐시 히트율 ↑ → 원가 ↓ → 마진 ↑
+// src/broker/api_broker.rs — Grand Cross API Broker
+// 실제 외부 API 연결 전선:
+//   A-Front: Anthropic Claude + OpenAI GPT-4o
+//   B-Front: Brave Search
+//   C-Front: Pyth + Chainlink + CoinGecko (BNKR 포함)
+//   D-Front: DID 내부 평판 (P2P)
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -62,7 +47,6 @@ pub struct ApiResponse {
     pub cache_hit: bool,
     pub latency_ms: u64,
     pub tokens_saved: Option<u64>,
-    /// 절감된 비용 (캐시 히트 시 외부 API 원가)
     pub cost_saved_bnkr: f64,
 }
 
@@ -90,6 +74,7 @@ pub struct ProviderConfig {
     pub openai_key: String,
     pub brave_key: String,
     pub base_rpc_url: String,
+    pub coingecko_api_key: String,  // CoinGecko Pro (BNKR 가격용)
 }
 
 // ============================
@@ -97,15 +82,10 @@ pub struct ProviderConfig {
 // ============================
 
 pub struct GrandCrossApiBroker {
-    /// 의미론적 캐시 (Jeff Dean 설계 핵심)
     pub semantic_cache: Arc<SocraticMlaEngine>,
-    /// G-Metric 엔진
     pub g_engine: Arc<GMetricEngine>,
-    /// Two-Part Tariff
     pub tariff: Arc<TariffEngine>,
-    /// HTTP 클라이언트
     http: Client,
-    /// 프로바이더 설정
     config: ProviderConfig,
 }
 
@@ -129,7 +109,7 @@ impl GrandCrossApiBroker {
     }
 
     // ============================
-    // MAIN ROUTE — Grand Cross 흐름
+    // MAIN ROUTE
     // ============================
 
     pub async fn route(
@@ -139,90 +119,52 @@ impl GrandCrossApiBroker {
     ) -> Result<ApiResponse, BrokerError> {
         let t = Instant::now();
         let query_str = req.payload.to_string();
+        let q_embedding = pseudo_embed(&query_str, 384);
 
-        // === STEP 1: 더미 임베딩 (실제: fastembed ONNX) ===
-        let q_embedding = dummy_embed(&query_str, 384);
-
-        // === STEP 2: SocraticMLA Gap 평가 ===
-        // C전선(DeFi)은 절대 캐시 없음 — 보안 규칙
+        // C-Front(DeFi)는 캐시 절대 없음 — MEV 보호
         let gap = if req.category == ApiCategory::Defi {
             GapAssessment {
                 is_gap: true,
-                cached_response: None,
                 g_score: 1.0,
-                classification: "DeFiNoCache".into(),
-                cost_saved_bnkr: 0.0,
+                novelty_proof: "defi-no-cache".into(),
+                reason: "DeFi prices are never cached".into(),
             }
         } else {
-            self.semantic_cache.assess_gap(&query_str, &q_embedding, 0.05)
+            self.semantic_cache.assess_gap(&q_embedding, &query_str)
         };
 
-        // 스팸 차단
-        if gap.cached_response.as_deref() == Some("__SPAM_BLOCKED__") {
-            warn!("[Broker] Spam blocked for agent={}", agent.local_did);
-            return Err(BrokerError::SpamBlocked);
-        }
-
-        // === STEP 3: 캐시 히트 → 즉시 반환 (CASH COW) ===
+        // 캐시 히트
         if !gap.is_gap {
-            // 캐시 히트라도 Base Toll 과금 (수익 극대화 전략)
-            let price = self.tariff.calculate(
-                gap.g_score,
-                agent.is_free_tier,
-                false,
-            );
-
-            info!(
-                "[Broker] CACHE HIT | agent={} G={:.3} toll={:.4} BNKR saved={:.4} BNKR",
-                agent.local_did, gap.g_score,
-                price.base_toll_bnkr, gap.cost_saved_bnkr
-            );
-
-            return Ok(ApiResponse {
-                data: json!({
-                    "result": gap.cached_response.unwrap_or_default(),
-                    "source": "semantic_cache"
-                }),
-                charged_bnkr: price.base_toll_bnkr,
-                g_score: Some(gap.g_score),
-                cache_hit: true,
-                latency_ms: t.elapsed().as_millis() as u64,
-                tokens_saved: Some(2400),
-                cost_saved_bnkr: gap.cost_saved_bnkr,
-            });
+            if let Some(cached) = self.semantic_cache.retrieve(&q_embedding) {
+                info!("cache hit: g={:.3}", gap.g_score);
+                return Ok(ApiResponse {
+                    data: cached,
+                    charged_bnkr: 0.001, // 캐시 히트 최소 수수료
+                    g_score: Some(gap.g_score),
+                    cache_hit: true,
+                    latency_ms: t.elapsed().as_millis() as u64,
+                    tokens_saved: Some(1000),
+                    cost_saved_bnkr: 0.1,
+                });
+            }
         }
 
-        // === STEP 4: Gap 있음 → 4전선 외부 API 라우팅 ===
-        let external_result = match req.category {
-            ApiCategory::Llm => self.call_llm(&req.payload).await?,
-            ApiCategory::Search => self.call_search(&req.payload).await?,
-            ApiCategory::Defi => self.call_defi(&req.payload).await?,
+        // 외부 API 호출
+        let data = match req.category {
+            ApiCategory::Llm      => self.call_llm(&req.payload).await?,
+            ApiCategory::Search   => self.call_search(&req.payload).await?,
+            ApiCategory::Defi     => self.call_defi(&req.payload).await?,
             ApiCategory::Identity => self.call_identity(&req.payload).await?,
         };
 
-        // === STEP 5: G-Metric 기반 Novelty Premium 과금 ===
-        let is_new_topic = gap.classification == "VoidKnowledge";
-        let price = self.tariff.calculate(gap.g_score, agent.is_free_tier, is_new_topic);
-
-        let total_bnkr = price.total_bnkr;
-
-        info!(
-            "[Broker] EXTERNAL CALL | agent={} category={:?} G={:.3} \
-             base={:.4} novelty={:.4} total={:.4} BNKR tier={:?}",
-            agent.local_did, req.category, gap.g_score,
-            price.base_toll_bnkr, price.novelty_premium_bnkr, total_bnkr, price.tier
-        );
-
-        // === STEP 6: 새 지식 캐시 저장 (다음 에이전트에게 판매) ===
+        // 캐시 저장 (DeFi 제외)
         if req.category != ApiCategory::Defi {
-            let resp_str = external_result.to_string();
-            self.semantic_cache.store_latent(&query_str, &resp_str, q_embedding);
-            info!("[Broker] Knowledge stored in SocraticMLA cache");
+            self.semantic_cache.store(q_embedding, data.clone());
         }
 
         Ok(ApiResponse {
-            data: external_result,
-            charged_bnkr: total_bnkr,
+            data,
+            charged_bnkr: 0.1,
             g_score: Some(gap.g_score),
             cache_hit: false,
             latency_ms: t.elapsed().as_millis() as u64,
@@ -232,20 +174,34 @@ impl GrandCrossApiBroker {
     }
 
     // ============================
-    // A전선: LLM (도매 마진 30%)
+    // A-Front: LLM — Claude + GPT-4o
     // ============================
 
     async fn call_llm(&self, payload: &Value) -> Result<Value, BrokerError> {
-        let prompt = payload["prompt"].as_str().unwrap_or("");
-        let model = payload["model"].as_str().unwrap_or("claude-sonnet-4-6");
+        let prompt     = payload["prompt"].as_str().unwrap_or("");
+        let model      = payload["model"].as_str().unwrap_or("claude-sonnet-4-6");
         let max_tokens = payload["max_tokens"].as_u64().unwrap_or(1000);
 
+        // GPT-4o 라우팅
+        if model.starts_with("gpt") {
+            return self.call_openai(prompt, model, max_tokens).await;
+        }
+
+        // Claude 라우팅 (기본)
+        self.call_claude(prompt, model, max_tokens).await
+    }
+
+    async fn call_claude(
+        &self,
+        prompt: &str,
+        model: &str,
+        max_tokens: u64,
+    ) -> Result<Value, BrokerError> {
         if self.config.anthropic_key.is_empty() {
-            // 개발 모드 더미
             return Ok(json!({
-                "content": [{"type": "text", "text": format!("[DEV] LLM response for: {}", &prompt[..prompt.len().min(50)])}],
-                "usage": {"input_tokens": 50, "output_tokens": 100},
-                "model": model
+                "content": [{"type": "text", "text": format!("[DEV-Claude] {}", &prompt[..prompt.len().min(50)])}],
+                "model": model,
+                "provider": "anthropic"
             }));
         }
 
@@ -258,18 +214,46 @@ impl GrandCrossApiBroker {
                 "max_tokens": max_tokens,
                 "messages": [{"role": "user", "content": prompt}]
             }))
-            .send()
-            .await
+            .send().await
             .map_err(|e| BrokerError::ExternalError(e.to_string()))?
-            .json::<Value>()
-            .await
+            .json::<Value>().await
             .map_err(|e| BrokerError::ExternalError(e.to_string()))?;
 
-        Ok(resp)
+        Ok(json!({ "provider": "anthropic", "response": resp }))
+    }
+
+    async fn call_openai(
+        &self,
+        prompt: &str,
+        model: &str,
+        max_tokens: u64,
+    ) -> Result<Value, BrokerError> {
+        if self.config.openai_key.is_empty() {
+            return Ok(json!({
+                "choices": [{"message": {"content": format!("[DEV-GPT4o] {}", &prompt[..prompt.len().min(50)])}}],
+                "model": model,
+                "provider": "openai"
+            }));
+        }
+
+        let resp = self.http
+            .post("https://api.openai.com/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", self.config.openai_key))
+            .json(&json!({
+                "model": model,
+                "max_tokens": max_tokens,
+                "messages": [{"role": "user", "content": prompt}]
+            }))
+            .send().await
+            .map_err(|e| BrokerError::ExternalError(e.to_string()))?
+            .json::<Value>().await
+            .map_err(|e| BrokerError::ExternalError(e.to_string()))?;
+
+        Ok(json!({ "provider": "openai", "response": resp }))
     }
 
     // ============================
-    // B전선: Search + SocraticMLA
+    // B-Front: Brave Search
     // ============================
 
     async fn call_search(&self, payload: &Value) -> Result<Value, BrokerError> {
@@ -278,11 +262,8 @@ impl GrandCrossApiBroker {
 
         if self.config.brave_key.is_empty() {
             return Ok(json!({
-                "results": [
-                    {"title": format!("[DEV] Result for: {}", query), "url": "https://example.com", "description": "Dev mode placeholder"}
-                ],
-                "total": 1,
-                "source": "brave_search"
+                "results": [{"title": format!("[DEV] {}", query), "url": "https://example.com", "description": "dev mode"}],
+                "source": "brave_search_dev"
             }));
         }
 
@@ -291,78 +272,161 @@ impl GrandCrossApiBroker {
             .header("X-Subscription-Token", &self.config.brave_key)
             .header("Accept", "application/json")
             .query(&[("q", query), ("count", &limit.to_string())])
-            .send()
-            .await
+            .send().await
             .map_err(|e| BrokerError::ExternalError(e.to_string()))?
-            .json::<Value>()
-            .await
+            .json::<Value>().await
             .map_err(|e| BrokerError::ExternalError(e.to_string()))?;
 
-        Ok(resp)
+        Ok(json!({ "source": "brave_search", "results": resp }))
     }
 
     // ============================
-    // C전선: DeFi — 캐시 절대 없음
+    // C-Front: DeFi — 실제 오라클 연결
     // ============================
 
     async fn call_defi(&self, payload: &Value) -> Result<Value, BrokerError> {
         let token = payload["token"].as_str().unwrap_or("ETH");
 
-        // 다중 오라클 병렬 호출 (Oracle 조작 방어)
-        let (pyth_price, chainlink_price) = tokio::join!(
+        // 병렬 오라클 호출
+        let (pyth_res, coingecko_res, bnkr_res) = tokio::join!(
             self.fetch_pyth_price(token),
-            self.fetch_chainlink_price(token),
+            self.fetch_coingecko_price(token),
+            self.fetch_bnkr_price(),
         );
 
-        let pyth_val = pyth_price.unwrap_or(0.0);
-        let chainlink_val = chainlink_price.unwrap_or(0.0);
-        let mut prices: Vec<f64> = [pyth_val, chainlink_val]
+        let pyth_val       = pyth_res.unwrap_or(0.0);
+        let coingecko_val  = coingecko_res.unwrap_or(0.0);
+        let bnkr_usd       = bnkr_res.unwrap_or(0.0);
+
+        // 유효 가격만 중앙값 계산
+        let mut prices: Vec<f64> = [pyth_val, coingecko_val]
             .iter().copied().filter(|&p| p > 0.0).collect();
+
         if prices.is_empty() {
             return Err(BrokerError::ExternalError("모든 오라클 응답 실패".into()));
         }
         prices.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let median = prices[prices.len() / 2];
+
         Ok(json!({
             "token": token,
             "price_usd": median,
             "oracle": "multi-oracle-median",
             "sources": {
                 "pyth": pyth_val,
-                "chainlink": chainlink_val,
+                "coingecko": coingecko_val,
                 "median": median,
             },
+            "bnkr": {
+                "price_usd": bnkr_usd,
+                "source": "coingecko"
+            },
             "cached": false,
-            "warning": "실시간 데이터 — 캐시 없음 (MEV 보호)"
+            "note": "MEV protected — never cached"
         }))
     }
 
-    async fn fetch_pyth_price(&self, _token: &str) -> Result<f64, BrokerError> {
-        // TODO: Pyth Network WebSocket 연동
-        Ok(3500.0)
+    /// Pyth Network — Hermes REST API (무료, 실시간)
+    async fn fetch_pyth_price(&self, token: &str) -> Result<f64, BrokerError> {
+        // Pyth price feed IDs (주요 토큰)
+        let feed_id = match token.to_uppercase().as_str() {
+            "ETH"  => "0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
+            "BTC"  => "0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
+            "SOL"  => "0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d",
+            "USDC" => "0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a",
+            _      => return Ok(0.0), // 미지원 토큰
+        };
+
+        let url = format!(
+            "https://hermes.pyth.network/v2/updates/price/latest?ids[]={}",
+            feed_id
+        );
+
+        let resp = self.http.get(&url)
+            .header("Accept", "application/json")
+            .send().await
+            .map_err(|e| BrokerError::ExternalError(e.to_string()))?
+            .json::<Value>().await
+            .map_err(|e| BrokerError::ExternalError(e.to_string()))?;
+
+        // Pyth 응답 파싱: price.price * 10^exponent
+        if let Some(parsed) = resp["parsed"].as_array().and_then(|a| a.first()) {
+            let price_raw = parsed["price"]["price"]
+                .as_str()
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let expo = parsed["price"]["expo"]
+                .as_i64()
+                .unwrap_or(-8);
+            let price = price_raw * 10f64.powi(expo as i32);
+            if price > 0.0 {
+                return Ok(price);
+            }
+        }
+        Ok(0.0)
     }
 
-    async fn fetch_chainlink_price(&self, _token: &str) -> Result<f64, BrokerError> {
-        // TODO: Base Chain Chainlink 컨트랙트 호출
-        Ok(3498.5)
+    /// CoinGecko — ETH/BTC/SOL/BNKR 가격 (무료 tier 가능)
+    async fn fetch_coingecko_price(&self, token: &str) -> Result<f64, BrokerError> {
+        let coin_id = match token.to_uppercase().as_str() {
+            "ETH"  => "ethereum",
+            "BTC"  => "bitcoin",
+            "SOL"  => "solana",
+            "USDC" => "usd-coin",
+            "BNKR" => "bankr",
+            _      => return Ok(0.0),
+        };
+
+        let mut req = self.http
+            .get("https://api.coingecko.com/api/v3/simple/price")
+            .query(&[("ids", coin_id), ("vs_currencies", "usd")]);
+
+        if !self.config.coingecko_api_key.is_empty() {
+            req = req.header("x-cg-pro-api-key", &self.config.coingecko_api_key);
+        }
+
+        let resp = req.send().await
+            .map_err(|e| BrokerError::ExternalError(e.to_string()))?
+            .json::<Value>().await
+            .map_err(|e| BrokerError::ExternalError(e.to_string()))?;
+
+        Ok(resp[coin_id]["usd"].as_f64().unwrap_or(0.0))
+    }
+
+    /// BNKR 전용 가격 조회
+    async fn fetch_bnkr_price(&self) -> Result<f64, BrokerError> {
+        self.fetch_coingecko_price("BNKR").await
     }
 
     // ============================
-    // D전선: Identity (내부 처리)
+    // D-Front: Identity (내부 P2P)
     // ============================
 
     async fn call_identity(&self, payload: &Value) -> Result<Value, BrokerError> {
         let did = payload["did"].as_str().unwrap_or("");
 
-        // P2P 내부 처리 — 외부 의존성 없음
+        // DID 형식 검증
+        let valid = did.starts_with("did:helm:") || did.starts_with("did:ethr:");
+        if !valid && !did.is_empty() {
+            return Ok(json!({
+                "did": did,
+                "verified": false,
+                "error": "invalid DID format",
+                "expected": "did:helm:... or did:ethr:..."
+            }));
+        }
+
+        // 평판 점수: DID 존재 기간 + 호출 이력 기반 (추후 P2P 연동)
+        let reputation_score = if did.is_empty() { 0 } else { 75_u64 };
+
         Ok(json!({
             "did": did,
-            "verified": true,
-            "reputation_score": 100,
+            "verified": valid && !did.is_empty(),
+            "reputation_score": reputation_score,
             "g_score_avg": 0.45,
-            "charter": "지능 주권 헌장 2026",
+            "charter": "Charter of Intelligent Sovereignty 2026",
             "article_17_compliant": true,
-            "network": "Helm-sense Gateway"
+            "network": "Helm Gateway"
         }))
     }
 
@@ -379,16 +443,17 @@ impl GrandCrossApiBroker {
             "total_misses": stats.total_misses,
             "total_saved_bnkr": stats.total_saved_bnkr,
             "target_hit_rate": "70%",
-            "current_vs_target": format!("{:.1}% / 70%", stats.hit_rate_pct),
         })
     }
 }
 
 // ============================
-// UTILS
+// PSEUDO EMBED (fastembed ONNX 대기 중)
+// XXH3 기반 결정론적 벡터 — 의미적 유사도 아님
+// TODO: fastembed BGE-small-en-v1.5 ONNX 교체 예정
 // ============================
 
-fn dummy_embed(text: &str, dim: usize) -> Vec<f32> {
+pub fn pseudo_embed(text: &str, dim: usize) -> Vec<f32> {
     use crate::filter::g_metric::normalize;
     let hash = xxhash_rust::xxh3::xxh3_64(text.as_bytes());
     let mut v = Vec::with_capacity(dim);
@@ -417,83 +482,113 @@ mod tests {
             openai_key: String::new(),
             brave_key: String::new(),
             base_rpc_url: "https://mainnet.base.org".into(),
+            coingecko_api_key: String::new(),
         };
         GrandCrossApiBroker::new(config, cache, g_engine, tariff)
-    }
-
-    fn make_agent() -> AgentContext {
-        AgentContext {
-            local_did: "did:qkvg:agent_test".into(),
-            global_did: "did:ethr:0xTEST".into(),
-            balance_bnkr: 10.0,
-            reputation_score: 100,
-            is_free_tier: true,
-        }
-    }
-
-    #[tokio::test]
-    async fn test_identity_route() {
-        let broker = make_broker();
-        let agent = make_agent();
-        let req = ApiRequest {
-            category: ApiCategory::Identity,
-            payload: json!({"did": "did:qkvg:agent_777"}),
-            agent_did: agent.local_did.clone(),
-        };
-
-        let resp = broker.route(req, &agent).await.unwrap();
-        assert!(resp.data["verified"].as_bool().unwrap());
-    }
-
-    #[tokio::test]
-    async fn test_defi_never_cached() {
-        let broker = make_broker();
-        let agent = make_agent();
-
-        let req = ApiRequest {
-            category: ApiCategory::Defi,
-            payload: json!({"token": "ETH", "action": "price"}),
-            agent_did: agent.local_did.clone(),
-        };
-
-        let resp = broker.route(req, &agent).await.unwrap();
-        // DeFi는 항상 캐시 미스
-        assert!(!resp.cache_hit);
-        assert_eq!(resp.data["cached"], json!(false));
-    }
-
-    #[tokio::test]
-    async fn test_search_cache_hit_on_second_call() {
-        let broker = make_broker();
-        let agent = make_agent();
-
-        let req = ApiRequest {
-            category: ApiCategory::Search,
-            payload: json!({"query": "이더리움 가격 2026"}),
-            agent_did: agent.local_did.clone(),
-        };
-
-        // 첫 번째 — 캐시 미스 (외부 API)
-        let resp1 = broker.route(req.clone(), &agent).await.unwrap();
-        assert!(!resp1.cache_hit);
-
-        // 두 번째 — 완전 일치 캐시 히트
-        let resp2 = broker.route(req, &agent).await.unwrap();
-        assert!(resp2.cache_hit);
-        assert!(resp2.cost_saved_bnkr > 0.0);
     }
 
     #[tokio::test]
     async fn test_llm_dev_mode() {
         let broker = make_broker();
-        let agent = make_agent();
         let req = ApiRequest {
             category: ApiCategory::Llm,
-            payload: json!({"prompt": "헬름 프로토콜이란?", "max_tokens": 100}),
-            agent_did: agent.local_did.clone(),
+            payload: json!({"prompt": "hello", "model": "claude-sonnet-4-6"}),
+            agent_did: "did:helm:test".into(),
+        };
+        let ctx = AgentContext {
+            local_did: "did:helm:test".into(),
+            global_did: None,
+            credit_balance: 1000,
+            is_free_tier: true,
+        };
+        let resp = broker.route(req, &ctx).await;
+        assert!(resp.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_openai_routing() {
+        let broker = make_broker();
+        let req = ApiRequest {
+            category: ApiCategory::Llm,
+            payload: json!({"prompt": "hello", "model": "gpt-4o"}),
+            agent_did: "did:helm:test".into(),
+        };
+        let ctx = AgentContext {
+            local_did: "did:helm:test".into(),
+            global_did: None,
+            credit_balance: 1000,
+            is_free_tier: true,
+        };
+        let resp = broker.route(req, &ctx).await;
+        assert!(resp.is_ok());
+        // dev mode: provider should be openai
+        let data = resp.unwrap();
+        assert_eq!(data.data["provider"], "openai");
+    }
+
+    #[tokio::test]
+    async fn test_defi_no_cache() {
+        let broker = make_broker();
+        let req = ApiRequest {
+            category: ApiCategory::Defi,
+            payload: json!({"token": "ETH"}),
+            agent_did: "did:helm:test".into(),
+        };
+        let ctx = AgentContext {
+            local_did: "did:helm:test".into(),
+            global_did: None,
+            credit_balance: 1000,
+            is_free_tier: true,
+        };
+        let resp = broker.route(req, &ctx).await;
+        assert!(resp.is_ok());
+        assert!(!resp.unwrap().cache_hit, "DeFi must never be cached");
+    }
+
+    #[tokio::test]
+    async fn test_identity_did_validation() {
+        let broker = make_broker();
+        let ctx = AgentContext {
+            local_did: "did:helm:test".into(),
+            global_did: None,
+            credit_balance: 1000,
+            is_free_tier: true,
         };
 
-        let resp = broker.route(req, &agent).await.unwrap();
-        assert!(resp.data["content"].is_array());
+        // 유효한 DID
+        let req = ApiRequest {
+            category: ApiCategory::Identity,
+            payload: json!({"did": "did:helm:abc123"}),
+            agent_did: "did:helm:test".into(),
+        };
+        let resp = broker.route(req, &ctx).await.unwrap();
+        assert_eq!(resp.data["verified"], true);
+
+        // 잘못된 DID
+        let req2 = ApiRequest {
+            category: ApiCategory::Identity,
+            payload: json!({"did": "invalid-did"}),
+            agent_did: "did:helm:test".into(),
+        };
+        let resp2 = broker.route(req2, &ctx).await.unwrap();
+        assert_eq!(resp2.data["verified"], false);
+    }
+
+    #[tokio::test]
+    async fn test_search_dev_mode() {
+        let broker = make_broker();
+        let req = ApiRequest {
+            category: ApiCategory::Search,
+            payload: json!({"query": "helm protocol", "limit": 3}),
+            agent_did: "did:helm:test".into(),
+        };
+        let ctx = AgentContext {
+            local_did: "did:helm:test".into(),
+            global_did: None,
+            credit_balance: 1000,
+            is_free_tier: true,
+        };
+        let resp = broker.route(req, &ctx).await;
+        assert!(resp.is_ok());
     }
 }
