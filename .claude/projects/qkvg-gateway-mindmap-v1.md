@@ -274,3 +274,37 @@ Break-even: Trail of Bits 감사 $50K → Month 1 충당 가능
 
 _마지막 업데이트: 2026-02-24 | Grand Cross v1.0.0 완료_
 _다음 세션: GCP 배포 + GitHub remote 연결_
+
+---
+
+## [20260224 — DASHBOARD SESSION]
+
+```
+[dashboard.rs] SSE 텔레메트리 스트리밍
+  → Result: ✓ 추가
+  → GET /dashboard → static/index.html
+  → GET /api/telemetry → SSE 1초 간격 push
+  → AppState.metrics 공유 원자 카운터
+
+[metrics.rs] GatewayMetrics 공유 카운터
+  → AtomicU64 기반 lock-free 계측
+  → record_bnkr / record_g_score / record_cache_hit 등
+  → g_distribution_snapshot() → 대시보드 G분포 차트
+
+[static/index.html] Ferrari Luce 대시보드
+  → Orbitron + Share Tech Mono 폰트
+  → 탄소섬유 배경 + 스캔라인 애니메이션
+  → 타코미터 SVG (TPS 실시간)
+  → BNKR 수익 카운터 (황금색)
+  → 4전선 바 + G분포 차트
+  → 공격 로그 스트림
+  → SSE 실서버 자동 연결 (배포 시)
+
+[git] 브랜치 gateway/grand-cross-v1 생성
+  → push to Helm-Protocol/Helm
+```
+
+## [미해결 TODO 업데이트]
+- [ ] AppState에 Arc<GatewayMetrics> 필드 추가 (main.rs)
+- [ ] 각 모듈에서 metrics.record_* 호출 이식
+- [ ] GCP Cloud Build Trigger 설정
