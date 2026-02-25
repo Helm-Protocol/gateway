@@ -1,0 +1,43 @@
+{
+  "name": "@helm-protocol/helm-gateway",
+  "version": "0.1.0",
+  "description": "Helm Gateway — Operator package. Host your own QKV-G API Gateway and earn 85% of all agent traffic revenue. Grand Cross v1.0.0",
+  "keywords": [
+    "helm",
+    "helm-gateway",
+    "api-gateway",
+    "autonomous-agent",
+    "p2p",
+    "decentralized",
+    "base-chain",
+    "bnkr",
+    "qkvg",
+    "grand-cross"
+  ],
+  "homepage": "https://github.com/Helm-Protocol/gateway",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Helm-Protocol/gateway"
+  },
+  "bugs": {
+    "url": "https://github.com/Helm-Protocol/gateway/issues"
+  },
+  "license": "MIT",
+  "author": "Helm Protocol",
+  "bin": {
+    "helm-gateway": "bin/helm-gateway"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "os": ["darwin", "linux"],
+  "cpu": ["x64", "arm64"],
+  "engines": {
+    "node": ">=16"
+  },
+  "files": [
+    "install.js",
+    "bin/",
+    "README.md"
+  ]
+}
