@@ -1,0 +1,40 @@
+{
+  "name": "@helm-protocol/helm-gateway",
+  "version": "0.1.0",
+  "description": "Helm Protocol Gateway — Host your own API gateway and earn BNKR revenue",
+  "keywords": [
+    "helm",
+    "gateway",
+    "api-broker",
+    "defi",
+    "agent-marketplace",
+    "bnkr",
+    "base-chain"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Helm-Protocol/gateway"
+  },
+  "bin": {
+    "helm-gateway": "bin/helm-gateway"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "os": ["darwin", "linux"],
+  "cpu": ["x64", "arm64"],
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "install.js",
+    "bin/",
+    "templates/"
+  ],
+  "helmGateway": {
+    "defaultPort": 8080,
+    "gatewayApiUrl": "https://gateway.helm-protocol.io",
+    "registryUrl": "https://registry.helm-protocol.io"
+  }
+}
