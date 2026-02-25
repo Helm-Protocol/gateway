@@ -346,6 +346,15 @@ pub async fn contribute(
     if post_deadline < Utc::now() {
         return HttpResponse::BadRequest().json(json!({"error": "Funding deadline has passed"}));
     }
+    // 기여 토큰 불일치 방어 — 다른 토큰으로 입력해도 차단
+    if req.token != post_token {
+        return HttpResponse::BadRequest().json(json!({
+            "error": "token_mismatch",
+            "expected_token": post_token,
+            "provided_token": req.token,
+            "hint": "Contribute using the token specified in the funding post"
+        }));
+    }
 
     // ── 잔액 확인 (BNKR 기준 — 멀티토큰 확장 시 token별 컬럼으로 교체) ──
     let balance: f64 = sqlx::query_scalar(

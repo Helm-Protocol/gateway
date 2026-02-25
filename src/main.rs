@@ -105,12 +105,19 @@ async fn did_exchange(
         .and_then(|v: &actix_web::http::header::HeaderValue| v.to_str().ok())
         .and_then(|s: &str| s.split(',').next())
         .map(|s: &str| s.trim().to_string())
-        .unwrap_or_else(|| {
+        .or_else(|| {
             http_req
                 .peer_addr()
                 .map(|a: std::net::SocketAddr| a.ip().to_string())
-                .unwrap_or_else(|| "unknown".to_string())
         });
+
+    let client_ip = match client_ip {
+        Some(ip) => ip,
+        None => return HttpResponse::BadRequest().json(json!({
+            "error": "cannot_determine_ip",
+            "message": "Client IP could not be determined — DID registration requires a verifiable source IP"
+        })),
+    };
 
     if let Err(e) = state.did_service.check_ip_rate_limit(&client_ip) {
         return HttpResponse::TooManyRequests().json(json!({
@@ -187,6 +194,8 @@ async fn did_exchange(
                     (actix_web::http::StatusCode::CONFLICT, "nonce_reuse"),
                 auth::AuthError::DatabaseError(_) =>
                     (actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "db_error"),
+                auth::AuthError::RateLimited =>
+                    (actix_web::http::StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
                 _ =>
                     (actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
             };

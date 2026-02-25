@@ -717,7 +717,7 @@ pub async fn my_listings(
                     "call_count": i.get::<i64, _>("call_count"),
                     "subscriber_count": i.get::<i32, _>("subscriber_count"),
                     "total_earned_bnkr": total_earned,
-                    "referrer_earned_bnkr": (total_earned.unwrap_or(0) as f64 * 0.15) as i64,
+                    "owner_commission_bnkr": (total_earned.unwrap_or(0) as f64 * 0.15) as i64,
                     "active": i.get::<bool, _>("active"),
                     "created_at": i.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
                 })
