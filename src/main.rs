@@ -346,24 +346,36 @@ async fn main() -> std::io::Result<()> {
         db: db.clone(),
     });
 
+    // did_service Arc — 모든 하위 State에서 JWT 검증에 공유
+    // JWT_SECRET은 main_state와 동일 키 사용 (단일 출처)
+    let shared_did_service: Arc<auth::DidExchangeService> = Arc::new(auth::DidExchangeService::new(
+        &std::env::var("JWT_SECRET").unwrap_or("dev-secret-change-in-prod".into())
+    ));
+
     let marketplace_state = web::Data::new(MarketplaceState {
-        db: db.clone(),
+        db:          db.clone(),
         elite_gate:  Arc::new(EliteGate::new(db.clone())),
         escrow_link: Arc::new(EscrowLink::new(
             std::env::var("QKVG_ESCROW_ADDRESS").unwrap_or_default(),
             std::env::var("BASE_RPC_URL").unwrap_or("https://mainnet.base.org".into()),
             std::env::var("GATEWAY_WALLET").unwrap_or_default(),
         )),
+        did_service: shared_did_service.clone(),
     });
 
     let funding_state = web::Data::new(FundingState {
-        db:         db.clone(),
-        elite_gate: Arc::new(EliteGate::new(db.clone())),
-        http:       reqwest::Client::builder()
-                        .timeout(std::time::Duration::from_secs(30))
-                        .build().unwrap(),
+        db:          db.clone(),
+        elite_gate:  Arc::new(EliteGate::new(db.clone())),
+        http:        reqwest::Client::builder()
+                         .timeout(std::time::Duration::from_secs(30))
+                         .build().unwrap(),
+        did_service: shared_did_service.clone(),
     });
-    let api_registry_state = web::Data::new(ApiRegistryState  { db: db.clone(), http: http_client });
+    let api_registry_state = web::Data::new(ApiRegistryState {
+        db:          db.clone(),
+        http:        http_client,
+        did_service: shared_did_service.clone(),
+    });
 
     info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     info!("  Helm-sense Gateway v0.2.0");

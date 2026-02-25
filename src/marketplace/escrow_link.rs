@@ -63,11 +63,16 @@ impl EscrowLink {
         let result = self.eth_call(&calldata).await?;
 
         // 반환값: bytes32 escrow_id
+        // 빈 결과 또는 "0x"는 컨트랙트 미배포/호출 실패 — Err 반환 (silent fake ID 금지)
         let escrow_id = result
             .get("result")
             .and_then(|r| r.as_str())
+            .filter(|s| !s.is_empty() && *s != "0x" && *s != "0x0000000000000000000000000000000000000000000000000000000000000000")
             .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("escrow-{}", uuid::Uuid::new_v4()));
+            .ok_or_else(|| {
+                "Escrow contract returned empty result — contract may not be deployed at this address. \
+                 Set QKVG_ESCROW_ADDRESS=0x0000...0000 to use dev mode.".to_string()
+            })?;
 
         info!("[escrow_link] locked {} BNKR for {} → escrow {}", amount_bnkr, payer_did, escrow_id);
         Ok(escrow_id)
@@ -173,10 +178,22 @@ impl EscrowLink {
             .map_err(|e| e.to_string())
     }
 
-    async fn eth_send(&self, data: &str) -> Result<Value, String> {
-        // 실제 운영: sign tx with gateway_wallet → eth_sendRawTransaction
-        // 현재: eth_call로 시뮬레이션 (배포 전)
-        warn!("[escrow_link] eth_sendRawTransaction not yet implemented — using eth_call");
-        self.eth_call(data).await
+    async fn eth_send(&self, _data: &str) -> Result<Value, String> {
+        // ⚠️  eth_sendRawTransaction 미구현 — 프로덕션 배포 불가
+        //
+        // 구현 필요 사항:
+        //   1. alloy / ethers-rs 의존성 추가
+        //   2. gateway_wallet (hex privkey) → LocalWallet 생성
+        //   3. TransactionRequest 구성 → sign → sendRawTransaction
+        //
+        // 현재: 프로덕션 모드에서 settle/refund 호출 자체를 Err로 차단
+        // (DEV 모드: contract_address = 0x000...000 → 위 분기에서 처리)
+        warn!("[escrow_link] eth_sendRawTransaction not implemented — settlement blocked in production mode");
+        Err(
+            "On-chain settlement is not yet implemented. \
+             Use dev mode (QKVG_ESCROW_ADDRESS=0x0000000000000000000000000000000000000000) \
+             or implement eth_sendRawTransaction with alloy/ethers-rs before production launch."
+                .to_string()
+        )
     }
 }

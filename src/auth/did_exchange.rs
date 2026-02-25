@@ -13,40 +13,54 @@
 use chrono::Utc;
 use ed25519_dalek::{Signature, VerifyingKey};
 use hex;
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use ulid::Ulid;
 
 use super::types::{AuthError, GlobalPassport, LocalVisa, VisaIssuanceResponse};
 
-/// JWT Claims
-#[derive(Debug, Serialize, Deserialize)]
-struct JwtClaims {
-    /// Subject = local_did
-    sub: String,
-    /// Global DID
-    gdid: String,
+/// JWT Claims — pub으로 공개하여 미들웨어에서 검증 가능하게
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JwtClaims {
+    /// Subject = local_did (did:qkvg:agent_...)
+    pub sub: String,
+    /// Global DID (did:helm:..., did:ethr:..., did:key:...)
+    pub gdid: String,
     /// Expiry (Unix timestamp)
-    exp: i64,
+    pub exp: i64,
     /// Issued at
-    iat: i64,
+    pub iat: i64,
 }
 
 /// DID Exchange 서비스
 pub struct DidExchangeService {
     jwt_secret: Vec<u8>,
-    /// 최근 사용된 nonce 세트 (재사용 공격 방어)
-    /// 실제 운영에서는 Redis로 대체
-    used_nonces: parking_lot::RwLock<std::collections::HashSet<String>>,
+    /// 사용된 nonce 맵: nonce_hash → 사용 시각 (Unix ts)
+    /// TTL: 48h 경과 시 자동 제거 (JWT 유효기간 24h × 2 = 안전마진)
+    /// 실제 운영에서는 Redis TTL SET NX로 대체
+    used_nonces: parking_lot::RwLock<std::collections::HashMap<String, i64>>,
 }
 
 impl DidExchangeService {
     pub fn new(jwt_secret: &str) -> Self {
         Self {
             jwt_secret: jwt_secret.as_bytes().to_vec(),
-            used_nonces: parking_lot::RwLock::new(std::collections::HashSet::new()),
+            used_nonces: parking_lot::RwLock::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// JWT 검증 — 미들웨어 / auth guard용
+    pub fn decode_jwt(&self, token: &str) -> Result<JwtClaims, AuthError> {
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.leeway = 0;
+        decode::<JwtClaims>(
+            token,
+            &DecodingKey::from_secret(&self.jwt_secret),
+            &validation,
+        )
+        .map(|d| d.claims)
+        .map_err(|_| AuthError::SessionExpired)
     }
 
     /// [핵심] 글로벌 DID → Local Visa 교환
@@ -145,30 +159,33 @@ impl DidExchangeService {
         Ok(())
     }
 
-    /// Nonce 재사용 방어
+    /// Nonce 재사용 방어 (TTL 기반)
+    ///
+    /// - nonce는 메시지 해시로 저장 (삽입 시각 포함)
+    /// - 48h TTL: JWT 유효기간(24h)의 2배 — 만료된 토큰의 nonce는 자동 해제
+    /// - LRU 제거 대신 시간 기반 제거 → 오래된 nonce 재사용 공격 차단
     fn check_and_consume_nonce(&self, message: &str) -> Result<(), AuthError> {
-        // 메시지에서 nonce 추출 (형식: "qkvg-auth:{did}:{nonce}:{timestamp}")
         let nonce_key = {
             let mut hasher = Keccak256::new();
             hasher.update(message.as_bytes());
             hex::encode(hasher.finalize())
         };
 
+        let now = Utc::now().timestamp();
+        const NONCE_TTL_SECS: i64 = 48 * 3600; // 48시간
+
         let mut nonces = self.used_nonces.write();
-        if nonces.contains(&nonce_key) {
+
+        // TTL 만료된 nonce 제거 (매 요청마다 — Redis 없는 환경에서 메모리 관리)
+        nonces.retain(|_, inserted_at| now - *inserted_at < NONCE_TTL_SECS);
+
+        // 중복 체크 (TTL 내 사용된 nonce)
+        if nonces.contains_key(&nonce_key) {
             return Err(AuthError::NonceReuse);
         }
 
-        // 소비 (실제 운영: TTL 설정된 Redis SET NX)
-        nonces.insert(nonce_key);
-
-        // 메모리 관리: 10,000개 초과 시 절반 제거
-        if nonces.len() > 10_000 {
-            let to_remove: Vec<_> = nonces.iter().take(5_000).cloned().collect();
-            for k in to_remove {
-                nonces.remove(&k);
-            }
-        }
+        // 소비 기록 (실제 운영: Redis SET NX EX 48*3600)
+        nonces.insert(nonce_key, now);
 
         Ok(())
     }

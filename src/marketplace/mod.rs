@@ -16,21 +16,23 @@ pub mod escrow_link;
 pub mod funding;
 pub mod types;
 
-use actix_web::{delete, get, post, web, HttpResponse, Responder};
+use actix_web::{delete, get, post, web, HttpRequest, HttpResponse, Responder};
 use chrono::Utc;
 use serde_json::json;
 use sqlx::PgPool;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::auth::{self, DidExchangeService};
 use elite_gate::EliteGate;
 use escrow_link::EscrowLink;
 use types::*;
 
 pub struct MarketplaceState {
-    pub db: PgPool,
-    pub elite_gate: Arc<EliteGate>,
+    pub db:          PgPool,
+    pub elite_gate:  Arc<EliteGate>,
     pub escrow_link: Arc<EscrowLink>,
+    pub did_service: Arc<DidExchangeService>,
 }
 
 // ============================
@@ -39,9 +41,15 @@ pub struct MarketplaceState {
 
 #[post("/marketplace/posts")]
 pub async fn create_post(
-    state: web::Data<MarketplaceState>,
-    req: web::Json<CreatePostRequest>,
+    state:    web::Data<MarketplaceState>,
+    http_req: HttpRequest,
+    req:      web::Json<CreatePostRequest>,
 ) -> impl Responder {
+    // JWT 인증
+    if let Err(r) = auth::require_auth(&http_req, &req.agent_did, &state.did_service) {
+        return r;
+    }
+
     // [Step 1] 엘리트 자격 검증
     let status = match state.elite_gate.check(&req.agent_did).await {
         Ok(s) => s,
@@ -272,9 +280,15 @@ pub async fn get_post(
 
 #[post("/marketplace/apply")]
 pub async fn apply(
-    state: web::Data<MarketplaceState>,
-    req: web::Json<ApplyRequest>,
+    state:    web::Data<MarketplaceState>,
+    http_req: HttpRequest,
+    req:      web::Json<ApplyRequest>,
 ) -> impl Responder {
+    // JWT 인증
+    if let Err(r) = auth::require_auth(&http_req, &req.agent_did, &state.did_service) {
+        return r;
+    }
+
     // DID 존재 체크 (엘리트 불필요)
     let exists = match state.elite_gate.did_exists(&req.agent_did).await {
         Ok(v) => v,
@@ -322,9 +336,14 @@ pub async fn apply(
         return HttpResponse::BadRequest().json(json!({"error": "already applied to this post"}));
     }
 
-    // 지원 저장
+    // ── 원자적 트랜잭션: 지원 저장 + 카운터 증가 (Race Condition 방지) ──
     let app_id = Uuid::new_v4();
-    let result = sqlx::query(
+    let mut tx = match state.db.begin().await {
+        Ok(t)  => t,
+        Err(e) => return HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
+    };
+
+    let insert = sqlx::query(
         r#"
         INSERT INTO marketplace_applications
             (id, post_id, applicant_did, proposal, counter_price_bnkr, portfolio_ref, status, created_at)
@@ -337,25 +356,27 @@ pub async fn apply(
     .bind(req.proposal.clone())
     .bind(req.counter_price_bnkr.map(|p| p as i64))
     .bind(req.portfolio_ref.clone())
-    .execute(&state.db)
-    .await;
+    .execute(&mut *tx).await;
 
-    if result.is_ok() {
-        // application_count 증가
-        let _ = sqlx::query(
-            "UPDATE marketplace_posts SET application_count = application_count+1, updated_at=NOW() WHERE id=$1",
-        )
-        .bind(req.post_id)
-        .execute(&state.db).await;
+    if let Err(e) = insert {
+        let _ = tx.rollback().await;
+        return HttpResponse::InternalServerError().json(json!({"error": e.to_string()}));
     }
 
-    match result {
-        Ok(_) => HttpResponse::Created().json(json!({
-            "application_id": app_id,
-            "message": "Application submitted"
-        })),
-        Err(e) => HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
+    let _ = sqlx::query(
+        "UPDATE marketplace_posts SET application_count = application_count+1, updated_at=NOW() WHERE id=$1",
+    )
+    .bind(req.post_id)
+    .execute(&mut *tx).await;
+
+    if let Err(e) = tx.commit().await {
+        return HttpResponse::InternalServerError().json(json!({"error": e.to_string()}));
     }
+
+    HttpResponse::Created().json(json!({
+        "application_id": app_id,
+        "message": "Application submitted"
+    }))
 }
 
 // ============================
@@ -364,9 +385,14 @@ pub async fn apply(
 
 #[post("/marketplace/comment")]
 pub async fn add_comment(
-    state: web::Data<MarketplaceState>,
-    req: web::Json<CommentRequest>,
+    state:    web::Data<MarketplaceState>,
+    http_req: HttpRequest,
+    req:      web::Json<CommentRequest>,
 ) -> impl Responder {
+    // JWT 인증
+    if let Err(r) = auth::require_auth(&http_req, &req.agent_did, &state.did_service) {
+        return r;
+    }
     let exists = match state.elite_gate.did_exists(&req.agent_did).await {
         Ok(v) => v,
         Err(e) => return HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
@@ -383,8 +409,14 @@ pub async fn add_comment(
         .map(|s| s.can_post)
         .unwrap_or(false);
 
+    // ── 원자적 트랜잭션: 댓글 + 카운터 ──
     let comment_id = Uuid::new_v4();
-    let result = sqlx::query(
+    let mut tx = match state.db.begin().await {
+        Ok(t)  => t,
+        Err(e) => return HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
+    };
+
+    let insert = sqlx::query(
         r#"
         INSERT INTO marketplace_comments
             (id, post_id, author_did, content, is_elite, created_at)
@@ -396,24 +428,27 @@ pub async fn add_comment(
     .bind(req.agent_did.clone())
     .bind(req.content.trim())
     .bind(is_elite)
-    .execute(&state.db)
-    .await;
+    .execute(&mut *tx).await;
 
-    if result.is_ok() {
-        let _ = sqlx::query(
-            "UPDATE marketplace_posts SET comment_count=comment_count+1, updated_at=NOW() WHERE id=$1",
-        )
-        .bind(req.post_id)
-        .execute(&state.db).await;
+    if let Err(e) = insert {
+        let _ = tx.rollback().await;
+        return HttpResponse::InternalServerError().json(json!({"error": e.to_string()}));
     }
 
-    match result {
-        Ok(_) => HttpResponse::Created().json(json!({
-            "comment_id": comment_id,
-            "is_elite": is_elite,
-        })),
-        Err(e) => HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
+    let _ = sqlx::query(
+        "UPDATE marketplace_posts SET comment_count=comment_count+1, updated_at=NOW() WHERE id=$1",
+    )
+    .bind(req.post_id)
+    .execute(&mut *tx).await;
+
+    if let Err(e) = tx.commit().await {
+        return HttpResponse::InternalServerError().json(json!({"error": e.to_string()}));
     }
+
+    HttpResponse::Created().json(json!({
+        "comment_id": comment_id,
+        "is_elite": is_elite,
+    }))
 }
 
 // ============================
@@ -422,9 +457,15 @@ pub async fn add_comment(
 
 #[post("/marketplace/select-winner")]
 pub async fn select_winner(
-    state: web::Data<MarketplaceState>,
-    req: web::Json<SelectWinnerRequest>,
+    state:    web::Data<MarketplaceState>,
+    http_req: HttpRequest,
+    req:      web::Json<SelectWinnerRequest>,
 ) -> impl Responder {
+    // JWT 인증
+    if let Err(r) = auth::require_auth(&http_req, &req.author_did, &state.did_service) {
+        return r;
+    }
+
     // 게시자 본인 확인
     let post = sqlx::query(
         "SELECT author_did, status FROM marketplace_posts WHERE id=$1",
@@ -498,9 +539,15 @@ pub async fn select_winner(
 
 #[post("/marketplace/confirm-delivery")]
 pub async fn confirm_delivery(
-    state: web::Data<MarketplaceState>,
-    req: web::Json<ConfirmDeliveryRequest>,
+    state:    web::Data<MarketplaceState>,
+    http_req: HttpRequest,
+    req:      web::Json<ConfirmDeliveryRequest>,
 ) -> impl Responder {
+    // JWT 인증
+    if let Err(r) = auth::require_auth(&http_req, &req.author_did, &state.did_service) {
+        return r;
+    }
+
     // 게시글 + 에스크로 ID 조회
     let post = sqlx::query(
         "SELECT author_did, status, winner_did, escrow_id, budget_bnkr FROM marketplace_posts WHERE id=$1",
@@ -563,38 +610,67 @@ pub async fn confirm_delivery(
 
 #[get("/marketplace/elite-status")]
 pub async fn elite_status(
-    state: web::Data<MarketplaceState>,
-    query: web::Query<std::collections::HashMap<String, String>>,
+    state:    web::Data<MarketplaceState>,
+    http_req: HttpRequest,
+    query:    web::Query<std::collections::HashMap<String, String>>,
 ) -> impl Responder {
     let did = match query.get("did") {
         Some(d) => d.clone(),
         None => return HttpResponse::BadRequest().json(json!({"error": "did query param required"})),
     };
 
+    // JWT 인증: 본인이면 상세 열람, 타인이면 공개 정보만
+    let is_self = http_req
+        .headers()
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .and_then(|token| state.did_service.decode_jwt(token).ok())
+        .map(|claims| claims.sub == did || claims.gdid == did)
+        .unwrap_or(false);
+
     match state.elite_gate.check(&did).await {
-        Ok(status) => HttpResponse::Ok().json(json!({
-            "did": did,
-            "can_post": status.can_post,
-            "elite_score": status.elite_score,
-            "requirements": {
-                "did_age": {
-                    "current_days": status.did_age_days,
-                    "required_days": 7,
-                    "ok": status.age_ok,
-                },
-                "api_activity": {
-                    "current_calls": status.api_call_count,
-                    "required_calls": 1,
-                    "ok": status.api_ok,
-                },
-                "referral": {
-                    "active": status.referral_active,
-                    "required": true,
-                    "ok": status.referral_ok,
-                }
-            },
-            "reject_reason": status.reject_reason,
-        })),
+        Ok(status) => {
+            if is_self {
+                // 본인: 상세 정보 (진행 상황, 거부 이유 포함)
+                HttpResponse::Ok().json(json!({
+                    "did": did,
+                    "can_post": status.can_post,
+                    "elite_score": status.elite_score,
+                    "requirements": {
+                        "did_age": {
+                            "current_days": status.did_age_days,
+                            "required_days": 7,
+                            "ok": status.age_ok,
+                        },
+                        "api_activity": {
+                            "current_calls": status.api_call_count,
+                            "required_calls": 1,
+                            "ok": status.api_ok,
+                        },
+                        "referral": {
+                            "active": status.referral_active,
+                            "required": true,
+                            "ok": status.referral_ok,
+                        }
+                    },
+                    "reject_reason": status.reject_reason,
+                    "tip": if !status.can_post {
+                        "Add Authorization: Bearer <token> and ensure all conditions are met"
+                    } else {
+                        "You are Elite! You can now post to the marketplace."
+                    }
+                }))
+            } else {
+                // 타인: 공개 정보만 (점수, Elite 여부 — 상세 진행상황 노출 금지)
+                HttpResponse::Ok().json(json!({
+                    "did": did,
+                    "can_post": status.can_post,
+                    "elite_score": status.elite_score,
+                    "note": "Detailed requirements are only visible to the DID owner (add Authorization header)"
+                }))
+            }
+        },
         Err(e) => HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
     }
 }

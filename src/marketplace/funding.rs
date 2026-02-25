@@ -23,13 +23,14 @@
 // POST /marketplace/funding/execute   — 목표 달성 시 실행 (게시자)
 // POST /marketplace/funding/refund    — 기한 초과 환불
 
-use actix_web::{get, post, web, HttpResponse, Responder};
+use actix_web::{get, post, web, HttpRequest, HttpResponse, Responder};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::auth::{self, DidExchangeService};
 use super::elite_gate::EliteGate;
 use std::sync::Arc;
 
@@ -127,6 +128,7 @@ pub struct FundingState {
     pub db:          PgPool,
     pub elite_gate:  Arc<EliteGate>,
     pub http:        reqwest::Client,
+    pub did_service: Arc<DidExchangeService>,
 }
 
 // ── Endpoints ────────────────────────────────────────────────────
@@ -134,9 +136,15 @@ pub struct FundingState {
 /// POST /marketplace/funding — 펀딩 게시글 작성 (엘리트 전용)
 #[post("/marketplace/funding")]
 pub async fn create_funding(
-    state: web::Data<FundingState>,
-    req:   web::Json<CreateFundingRequest>,
+    state:    web::Data<FundingState>,
+    http_req: HttpRequest,
+    req:      web::Json<CreateFundingRequest>,
 ) -> impl Responder {
+    // JWT 인증
+    if let Err(r) = auth::require_auth(&http_req, &req.author_did, &state.did_service) {
+        return r;
+    }
+
     // 엘리트 검증
     let status = match state.elite_gate.check(&req.author_did).await {
         Ok(s)  => s,
@@ -269,12 +277,18 @@ pub async fn list_funding(
     }
 }
 
-/// POST /marketplace/funding/contribute — 기여
+/// POST /marketplace/funding/contribute — 기여 (DID 있으면 누구나)
 #[post("/marketplace/funding/contribute")]
 pub async fn contribute(
-    state: web::Data<FundingState>,
-    req:   web::Json<ContributeRequest>,
+    state:    web::Data<FundingState>,
+    http_req: HttpRequest,
+    req:      web::Json<ContributeRequest>,
 ) -> impl Responder {
+    // JWT 인증
+    if let Err(r) = auth::require_auth(&http_req, &req.contributor_did, &state.did_service) {
+        return r;
+    }
+
     if req.amount <= 0.0 {
         return HttpResponse::BadRequest().json(json!({"error": "amount must be > 0"}));
     }
@@ -293,10 +307,10 @@ pub async fn contribute(
     };
 
     use sqlx::Row as _;
-    let post_status = post_row.get::<String, _>("status");
+    let post_status   = post_row.get::<String, _>("status");
     let post_deadline = post_row.get::<chrono::DateTime<chrono::Utc>, _>("deadline");
     let post_goal_amount = post_row.get::<f64, _>("goal_amount");
-    let post_token = post_row.get::<String, _>("token");
+    let post_token    = post_row.get::<String, _>("token");
 
     if post_status != "active" {
         return HttpResponse::BadRequest().json(json!({"error": format!("Funding is {}", post_status)}));
@@ -305,10 +319,56 @@ pub async fn contribute(
         return HttpResponse::BadRequest().json(json!({"error": "Funding deadline has passed"}));
     }
 
-    // 잔액 확인 (balance_column 동적 적용)
-    // 실제: multi_token::balance_column(&token) 사용
-    // 여기선 BNKR 기준으로 처리 (확장 가능)
+    // ── 잔액 확인 (BNKR 기준 — 멀티토큰 확장 시 token별 컬럼으로 교체) ──
+    let balance: f64 = sqlx::query_scalar(
+        "SELECT balance_bnkr FROM local_visas WHERE local_did = $1",
+    )
+    .bind(req.contributor_did.clone())
+    .fetch_one(&state.db).await
+    .unwrap_or(0.0);
+
+    if balance < req.amount {
+        return HttpResponse::PaymentRequired().json(json!({
+            "error": "Insufficient balance",
+            "required": req.amount,
+            "current": balance,
+            "token": req.token,
+            "topup": "helm pay --token BNKR --amount <n>"
+        }));
+    }
+
+    // ── 원자적 트랜잭션: 차감 → 기여 기록 → 펀딩 합계 업데이트 ──
     let contrib_id = Uuid::new_v4();
+
+    let mut tx = match state.db.begin().await {
+        Ok(t)  => t,
+        Err(e) => return HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
+    };
+
+    // 1. 기여자 잔액 차감 (Checks-Effects-Interactions)
+    let deduct_ok = sqlx::query(
+        "UPDATE local_visas SET balance_bnkr = balance_bnkr - $1 WHERE local_did = $2 AND balance_bnkr >= $1",
+    )
+    .bind(req.amount)
+    .bind(req.contributor_did.clone())
+    .execute(&mut *tx).await;
+
+    match deduct_ok {
+        Ok(r) if r.rows_affected() == 0 => {
+            let _ = tx.rollback().await;
+            return HttpResponse::PaymentRequired().json(json!({
+                "error": "Insufficient balance (concurrent deduction detected)",
+                "hint": "Your balance may have changed. Please retry."
+            }));
+        }
+        Err(e) => {
+            let _ = tx.rollback().await;
+            return HttpResponse::InternalServerError().json(json!({"error": e.to_string()}));
+        }
+        _ => {}
+    }
+
+    // 2. 기여 기록
     let _ = sqlx::query(
         r#"
         INSERT INTO funding_contributions
@@ -321,9 +381,9 @@ pub async fn contribute(
     .bind(req.contributor_did.clone())
     .bind(req.amount)
     .bind(req.token.clone())
-    .execute(&state.db).await;
+    .execute(&mut *tx).await;
 
-    // 펀딩 합계 업데이트
+    // 3. 펀딩 합계 업데이트 (원자적 RETURNING)
     let new_raised: f64 = sqlx::query_scalar(
         r#"
         UPDATE funding_posts
@@ -336,7 +396,12 @@ pub async fn contribute(
     )
     .bind(req.amount)
     .bind(req.post_id)
-    .fetch_one(&state.db).await.unwrap_or(0.0);
+    .fetch_one(&mut *tx).await
+    .unwrap_or(0.0);
+
+    if let Err(e) = tx.commit().await {
+        return HttpResponse::InternalServerError().json(json!({"error": e.to_string()}));
+    }
 
     let progress = (new_raised / post_goal_amount * 100.0).min(100.0);
     let reached  = new_raised >= post_goal_amount;
@@ -349,9 +414,9 @@ pub async fn contribute(
         "progress_pct": progress,
         "goal_reached": reached,
         "message": if reached {
-            "🎉 Funding goal reached! Author can now execute the plan."
+            "Funding goal reached! Author can now execute the plan."
         } else {
-            "✅ Contribution recorded."
+            "Contribution recorded."
         }
     }))
 }

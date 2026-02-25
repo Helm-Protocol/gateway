@@ -22,12 +22,15 @@
 //   A의 upstream 비용은 A가 직접 관리
 //   A는 가격을 올려서 마진을 만든다
 
-use actix_web::{delete, get, post, web, HttpResponse, Responder};
+use actix_web::{delete, get, post, web, HttpRequest, HttpResponse, Responder};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
+
+use crate::auth::{self, DidExchangeService};
+use std::sync::Arc;
 
 // ============================
 // TYPES
@@ -116,8 +119,9 @@ pub struct ListApiQuery {
 // ============================
 
 pub struct ApiRegistryState {
-    pub db: PgPool,
-    pub http: reqwest::Client,
+    pub db:          PgPool,
+    pub http:        reqwest::Client,
+    pub did_service: Arc<DidExchangeService>,
 }
 
 // ============================
@@ -128,9 +132,15 @@ pub struct ApiRegistryState {
 /// 에이전트가 자신의 API를 중개 상품으로 등록
 #[post("/api-registry/register")]
 pub async fn register_api(
-    state: web::Data<ApiRegistryState>,
-    req: web::Json<RegisterApiRequest>,
+    state:    web::Data<ApiRegistryState>,
+    http_req: HttpRequest,
+    req:      web::Json<RegisterApiRequest>,
 ) -> impl Responder {
+    // JWT 인증
+    if let Err(r) = auth::require_auth(&http_req, &req.agent_did, &state.did_service) {
+        return r;
+    }
+
     // DID 존재 확인
     let exists: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM local_visas WHERE local_did = $1",
@@ -262,12 +272,18 @@ pub async fn list_apis(
 }
 
 /// POST /api-registry/subscribe
-/// B가 A의 API를 구독 → A가 B의 referrer로 자동 등록
+/// B가 A의 API를 구독
+/// ※ 레퍼럴은 helm init --referrer 시에만 설정됨 (API 구독과 무관)
 #[post("/api-registry/subscribe")]
 pub async fn subscribe(
-    state: web::Data<ApiRegistryState>,
-    req: web::Json<SubscribeRequest>,
+    state:    web::Data<ApiRegistryState>,
+    http_req: HttpRequest,
+    req:      web::Json<SubscribeRequest>,
 ) -> impl Responder {
+    // JWT 인증
+    if let Err(r) = auth::require_auth(&http_req, &req.subscriber_did, &state.did_service) {
+        return r;
+    }
     // listing 확인
     let listing = sqlx::query(
         "SELECT owner_did, name, price_per_call_bnkr FROM api_listings WHERE id = $1 AND active = true",
@@ -314,18 +330,9 @@ pub async fn subscribe(
     .bind(owner_did.clone())
     .execute(&state.db).await;
 
-    // ★ 핵심: owner를 subscriber의 referrer로 등록
-    // → 이후 모든 API 호출 시 owner가 15% 수수료 자동 수취
-    let _ = sqlx::query(
-        r#"
-        UPDATE local_visas
-        SET referrer_did = $1
-        WHERE local_did = $2 AND referrer_did IS NULL
-        "#,
-    )
-    .bind(owner_did.clone())
-    .bind(req.subscriber_did.clone())
-    .execute(&state.db).await;
+    // ※ 레퍼럴은 helm init --referrer 로만 설정 (API 구독 시 자동 배정 금지)
+    //   이유: API 구독이 글로벌 레퍼럴을 오염시키는 버그 수정
+    //   API owner 수익은 proxy_call에서 owner_did 직접 결제로 처리
 
     // subscriber_count 증가
     let _ = sqlx::query(
@@ -340,15 +347,11 @@ pub async fn subscribe(
         "owner_did": owner_did,
         "api_name": api_name,
         "price_per_call_bnkr": price,
-        "referrer_registered": true,
-        "message": format!(
-            "Subscribed! {} is now your referrer. 15% of your API fees go to them.",
-            owner_did
-        ),
+        "message": format!("Subscribed to {}! You can now call this API via Gateway.", api_name),
         "billing_note": {
             "per_call": format!("{} BNKR", price),
             "to_treasury": format!("{} BNKR (85%)", (price as f64 * 0.85) as u64),
-            "to_owner": format!("{} BNKR (15% referrer)", (price as f64 * 0.15) as u64),
+            "to_api_owner": format!("{} BNKR (15% reseller commission)", (price as f64 * 0.15) as u64),
         }
     }))
 }
@@ -357,9 +360,14 @@ pub async fn subscribe(
 /// B가 A의 API를 Gateway를 통해 호출 (과금 + 프록시)
 #[post("/api-registry/call")]
 pub async fn proxy_call(
-    state: web::Data<ApiRegistryState>,
-    req: web::Json<ProxyCallRequest>,
+    state:    web::Data<ApiRegistryState>,
+    http_req: HttpRequest,
+    req:      web::Json<ProxyCallRequest>,
 ) -> impl Responder {
+    // JWT 인증
+    if let Err(r) = auth::require_auth(&http_req, &req.caller_did, &state.did_service) {
+        return r;
+    }
     // 구독 확인
     let sub = sqlx::query(
         r#"
@@ -398,30 +406,58 @@ pub async fn proxy_call(
         }));
     }
 
-    // 과금 선차감 (Checks-Effects-Interactions)
-    let referrer_share = (price as f64 * 0.15) as i64;
-    let _ = sqlx::query(
+    // ── 원자적 과금 트랜잭션 (Checks-Effects-Interactions) ──────────
+    // 차감 + 수수료 지급을 하나의 트랜잭션으로 묶어 Race Condition 방지
+    let owner_share = (price as f64 * 0.15) as f64;  // 15% → API owner
+    // 85%는 Gateway Treasury (별도 정산 — 현재는 차감분에서 암묵적 보유)
+
+    let mut billing_tx = match state.db.begin().await {
+        Ok(t)  => t,
+        Err(e) => return HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
+    };
+
+    // 1. 호출자 잔액 차감 (조건부: 잔액 부족 시 rows_affected = 0)
+    let deduct = sqlx::query(
         r#"
         UPDATE local_visas
-        SET balance_bnkr = balance_bnkr - $1,
-            total_calls  = total_calls + 1,
-            total_paid_bnkr = total_paid_bnkr + $1
-        WHERE local_did = $2
+        SET balance_bnkr    = balance_bnkr - $1,
+            total_calls      = total_calls + 1,
+            total_paid_bnkr  = total_paid_bnkr + $1
+        WHERE local_did = $2 AND balance_bnkr >= $1
         "#,
     )
     .bind(price as f64)
     .bind(req.caller_did.clone())
-    .execute(&state.db).await;
+    .execute(&mut *billing_tx).await;
 
-    // owner referrer 수수료 지급
+    match deduct {
+        Ok(r) if r.rows_affected() == 0 => {
+            let _ = billing_tx.rollback().await;
+            return HttpResponse::PaymentRequired().json(json!({
+                "error": "Insufficient balance (balance changed between check and deduction)",
+                "hint": "Please retry"
+            }));
+        }
+        Err(e) => {
+            let _ = billing_tx.rollback().await;
+            return HttpResponse::InternalServerError().json(json!({"error": e.to_string()}));
+        }
+        _ => {}
+    }
+
+    // 2. API owner 수수료 지급 (15%)
     let _ = sqlx::query(
         "UPDATE local_visas SET balance_bnkr = balance_bnkr + $1 WHERE local_did = $2",
     )
-    .bind(referrer_share as f64)
+    .bind(owner_share)
     .bind(owner_did.clone())
-    .execute(&state.db).await;
+    .execute(&mut *billing_tx).await;
 
-    // 실제 API 프록시 호출
+    if let Err(e) = billing_tx.commit().await {
+        return HttpResponse::InternalServerError().json(json!({"error": e.to_string()}));
+    }
+
+    // ── 실제 API 프록시 호출
     let api_result = state.http
         .post(&endpoint_url)
         .json(&req.payload)
@@ -450,30 +486,41 @@ pub async fn proxy_call(
 
     match api_result {
         Ok(r) => {
-            let status = r.status().as_u16();
+            let upstream_status = r.status().as_u16();
             let body: serde_json::Value = r.json().await.unwrap_or(json!({}));
             HttpResponse::Ok().json(json!({
                 "result": body,
                 "billing": {
                     "charged_bnkr": price,
                     "treasury_bnkr": (price as f64 * 0.85) as u64,
-                    "referrer_bnkr": referrer_share,
-                    "referrer_did": owner_did,
+                    "owner_commission_bnkr": owner_share as u64,
+                    "owner_did": owner_did,
                 },
-                "upstream_status": status,
+                "upstream_status": upstream_status,
             }))
         }
         Err(e) => {
-            // 실패 시 환불
-            let _ = sqlx::query(
-                "UPDATE local_visas SET balance_bnkr = balance_bnkr + $1 WHERE local_did = $2",
-            )
-            .bind(price as f64)
-            .bind(req.caller_did.clone())
-            .execute(&state.db).await;
+            // 업스트림 실패 시 환불 트랜잭션 (호출자에게 반환, owner share도 회수)
+            if let Ok(mut refund_tx) = state.db.begin().await {
+                let _ = sqlx::query(
+                    "UPDATE local_visas SET balance_bnkr = balance_bnkr + $1 WHERE local_did = $2",
+                )
+                .bind(price as f64)
+                .bind(req.caller_did.clone())
+                .execute(&mut *refund_tx).await;
+
+                let _ = sqlx::query(
+                    "UPDATE local_visas SET balance_bnkr = balance_bnkr - $1 WHERE local_did = $2 AND balance_bnkr >= $1",
+                )
+                .bind(owner_share)
+                .bind(owner_did.clone())
+                .execute(&mut *refund_tx).await;
+
+                let _ = refund_tx.commit().await;
+            }
             HttpResponse::BadGateway().json(json!({
                 "error": format!("Upstream API error: {}", e),
-                "refunded": price,
+                "refunded_bnkr": price,
             }))
         }
     }
