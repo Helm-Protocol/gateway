@@ -101,6 +101,35 @@ pub enum Commands {
         #[command(subcommand)]
         action: WombCommands,
     },
+
+    /// Helm Sense API Gateway — HTTP server for the three moats.
+    ///
+    /// Exposes the Helm protocol as a REST API:
+    ///   F-Line: Sense Cortex (G-metric intelligence)
+    ///   G-Line: Sync-O (GRG codec pipeline)
+    ///   E-Line: Sense Memory (agent persistent memory)
+    ///   D-Line: FICO Credit Bureau
+    ///   Pool:   HelmPool (human contract principal model)
+    ///   Graph:  Referral earnings dashboard
+    Gateway {
+        #[command(subcommand)]
+        action: GatewayCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum GatewayCommands {
+    /// Start the Helm Sense API HTTP server.
+    Start {
+        /// Port to listen on.
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+        /// Public URL for registration (e.g. https://my-gateway.example.com).
+        #[arg(long)]
+        public_url: Option<String>,
+    },
+    /// Show gateway statistics and revenue summary.
+    Status,
 }
 
 #[derive(Subcommand, Debug)]

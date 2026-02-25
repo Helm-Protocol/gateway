@@ -1,4 +1,5 @@
 mod cli;
+mod gateway;
 
 use anyhow::Result;
 use std::path::Path;
@@ -8,7 +9,7 @@ use tracing_subscriber::EnvFilter;
 use helm_core::{HelmConfig, Runtime};
 
 use cli::banner;
-use cli::commands::{Cli, Commands, StoreCommands, GrgCommands, WombCommands};
+use cli::commands::{Cli, Commands, GatewayCommands, GrgCommands, StoreCommands, WombCommands};
 use cli::init::cmd_init;
 use cli::moderator::{ModeratorBot, Language};
 
@@ -48,6 +49,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Womb { action }) => {
             cmd_womb(action)
+        }
+        Some(Commands::Gateway { action }) => {
+            cmd_gateway(action).await
         }
         None => {
             // Default: show banner and start node
@@ -373,6 +377,22 @@ fn cmd_womb(action: WombCommands) -> Result<()> {
 
     println!();
     Ok(())
+}
+
+async fn cmd_gateway(action: GatewayCommands) -> Result<()> {
+    match action {
+        GatewayCommands::Start { port, public_url } => {
+            gateway::start_gateway(port, public_url).await
+        }
+        GatewayCommands::Status => {
+            banner::print_banner();
+            banner::print_section("Gateway Status");
+            banner::print_info("Note", "Gateway is not running. Start with: helm gateway start");
+            banner::print_info("Port", "8080 (default)");
+            banner::print_info("Lines", "F/G/E/D (Sense Cortex, Sync-O, Memory, FICO)");
+            Ok(())
+        }
+    }
 }
 
 fn cmd_info() -> Result<()> {

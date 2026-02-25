@@ -30,9 +30,15 @@ rand = { workspace = true }
 reqwest = { version = "0.12", features = ["json"] }
 dirs = "5"
 sha3 = "0.10"
+sha2 = "0.10"
 bs58 = "0.5"
 base64 = "0.22"
 hex = "0.4"
+# HTTP Gateway
+axum = { version = "0.7", features = ["macros"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "limit"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+tokio-util = { version = "0.7" }
 
 [dev-dependencies]
 serde_json = { workspace = true }
