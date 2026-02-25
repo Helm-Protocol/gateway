@@ -9,6 +9,7 @@ use helm_core::{HelmConfig, Runtime};
 
 use cli::banner;
 use cli::commands::{Cli, Commands, StoreCommands, GrgCommands, WombCommands};
+use cli::init::cmd_init;
 use cli::moderator::{ModeratorBot, Language};
 
 #[tokio::main]
@@ -24,6 +25,9 @@ async fn main() -> Result<()> {
         .init();
 
     match args.command {
+        Some(Commands::Init { gateway, referrer, github, force }) => {
+            cmd_init(gateway, referrer, github, force).await
+        }
         Some(Commands::Run { name, port, listen }) => {
             cmd_run(&args.config, name, port, listen).await
         }

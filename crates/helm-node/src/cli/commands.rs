@@ -33,6 +33,29 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Initialize Helm identity — generate Ed25519 DID and register with Gateway.
+    ///
+    /// Two strategies:
+    ///   default:   pure Ed25519 keypair  (agents & automated systems)
+    ///   --github:  GitHub OAuth device flow + Ed25519  (humans, social proof)
+    Init {
+        /// Gateway URL to register with.
+        #[arg(long)]
+        gateway: Option<String>,
+
+        /// DID of your referrer (earns them 10% of your spend).
+        #[arg(long)]
+        referrer: Option<String>,
+
+        /// Authenticate via GitHub OAuth (Device Flow) to link GitHub identity.
+        #[arg(long)]
+        github: bool,
+
+        /// Re-initialize even if already initialized.
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Start the Helm node.
     Run {
         /// Node name (overrides config file).

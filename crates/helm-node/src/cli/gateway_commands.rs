@@ -191,6 +191,9 @@ pub struct HelmConfig {
     pub did: String,
     pub gateway_url: String,
     pub jwt_token: Option<String>,
+    /// GitHub login handle if initialized with `--github`, e.g. "octocat".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_login: Option<String>,
 }
 
 impl HelmConfig {

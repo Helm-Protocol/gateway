@@ -114,7 +114,7 @@ impl EdgeApi {
     ) -> EdgeResponse {
         match request {
             EdgeRequest::GrgEncode { data, mode } => {
-                self.billing.record_call(caller, "grg/encode", 1, timestamp_ms);
+                self.billing.record_call(caller, None, "grg/encode", 1, timestamp_ms);
                 self.grg.set_mode(mode);
 
                 match self.grg.encode(&data) {
@@ -131,7 +131,7 @@ impl EdgeApi {
             }
 
             EdgeRequest::AttentionQuery { query_vector, sequence_id } => {
-                self.billing.record_call(caller, "attention/query", 1, timestamp_ms);
+                self.billing.record_call(caller, None, "attention/query", 1, timestamp_ms);
 
                 let table_idx = *self.sequence_map.entry(sequence_id).or_insert_with(|| {
                     self.engine.create_sequence(sequence_id)
@@ -157,7 +157,7 @@ impl EdgeApi {
             }
 
             EdgeRequest::NetworkRelay { destination, payload } => {
-                self.billing.record_call(caller, "network/relay", 1, timestamp_ms);
+                self.billing.record_call(caller, None, "network/relay", 1, timestamp_ms);
                 info!(
                     "Edge API: relay {} bytes to {} for {}",
                     payload.len(), destination, caller
