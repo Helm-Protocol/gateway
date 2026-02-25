@@ -86,20 +86,40 @@ impl DidExchangeService {
     }
 
     /// Ed25519 서명 검증
+    ///
+    /// 지원 DID 포맷:
+    ///   did:helm:<base58>  → public_key 필드에서 pubkey 추출 (Helm CLI 기본)
+    ///   did:ethr:0x<hex>   → DID에서 직접 pubkey 추출
+    ///   did:key:<hex>      → DID에서 직접 pubkey 추출
     fn verify_passport_signature(
         &self,
         passport: &GlobalPassport,
     ) -> Result<(), AuthError> {
-        // did:ethr:0xABC... → 공개키 추출
-        let pubkey_hex = passport
-            .did
-            .strip_prefix("did:ethr:0x")
-            .or_else(|| passport.did.strip_prefix("did:key:"))
-            .ok_or_else(|| AuthError::InvalidDidFormat(passport.did.clone()))?;
-
-        let pubkey_bytes = hex::decode(pubkey_hex).map_err(|e| {
-            AuthError::InvalidDidFormat(format!("hex 디코드 실패: {e}"))
-        })?;
+        // DID 포맷에 따라 공개키 추출
+        let pubkey_bytes: Vec<u8> = if passport.did.starts_with("did:helm:") {
+            // did:helm: 포맷 — DID 자체가 pubkey 해시이므로 public_key 필드 필요
+            let pubkey_hex = passport
+                .public_key
+                .as_deref()
+                .ok_or_else(|| AuthError::InvalidDidFormat(
+                    "did:helm: 포맷은 public_key 필드가 필요합니다".into()
+                ))?;
+            hex::decode(pubkey_hex).map_err(|e| {
+                AuthError::InvalidDidFormat(format!("public_key hex 디코드 실패: {e}"))
+            })?
+        } else {
+            // did:ethr:0xABC... 또는 did:key:<hex> → DID에서 직접 추출
+            let pubkey_hex = passport
+                .did
+                .strip_prefix("did:ethr:0x")
+                .or_else(|| passport.did.strip_prefix("did:key:"))
+                .ok_or_else(|| AuthError::InvalidDidFormat(
+                    format!("지원하지 않는 DID 포맷 (did:helm:, did:ethr:, did:key: 만 허용): {}", passport.did)
+                ))?;
+            hex::decode(pubkey_hex).map_err(|e| {
+                AuthError::InvalidDidFormat(format!("DID hex 디코드 실패: {e}"))
+            })?
+        };
 
         // Ed25519 검증키 구성
         let key_array: [u8; 32] = pubkey_bytes

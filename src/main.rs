@@ -73,6 +73,14 @@ async fn metrics(state: web::Data<AppState>) -> impl Responder {
 
 // ── DID Exchange ──────────────────────────────────────────────────
 
+/// Helm CLI 및 외부 에이전트가 보내는 인증 요청
+///
+/// Helm CLI (`helm init`) 전송 필드:
+///   global_did   = "did:helm:<base58>"
+///   public_key   = hex(Ed25519 pubkey)   — did:helm: 포맷 전용
+///   nonce        = hex(random 16 bytes)
+///   signature    = hex(Ed25519 sig of "helm-register:{did}:{nonce}")
+///   referrer_did = Option<String>
 #[derive(Deserialize)]
 struct ExchangeRequest {
     global_did:    String,
@@ -88,33 +96,82 @@ async fn did_exchange(
     state: web::Data<AppState>,
     req: web::Json<ExchangeRequest>,
 ) -> impl Responder {
-    // signature 검증 (실제: Ed25519 verify)
-    if hex::decode(&req.signature).is_err() {
-        return HttpResponse::BadRequest().json(json!({"error": "invalid signature hex"}));
+    // signature hex → bytes 변환
+    let sig_bytes = match hex::decode(&req.signature) {
+        Ok(b) => b,
+        Err(_) => {
+            return HttpResponse::BadRequest().json(json!({"error": "signature hex 디코드 실패"}));
+        }
+    };
+
+    // signed_message 결정:
+    //   1. 명시적으로 전달된 경우 그대로 사용
+    //   2. Helm CLI 포맷: "helm-register:{did}:{nonce}"
+    //   3. nonce만 있는 경우: nonce를 메시지로 사용
+    let signed_message = req.signed_message.clone().unwrap_or_else(|| {
+        if let Some(nonce) = &req.nonce {
+            format!("helm-register:{}:{}", req.global_did, nonce)
+        } else {
+            req.global_did.clone()
+        }
+    });
+
+    // GlobalPassport 구성
+    let passport = auth::GlobalPassport {
+        did:            req.global_did.clone(),
+        signature:      sig_bytes,
+        signed_message,
+        public_key:     req.public_key.clone(),
+    };
+
+    // DidExchangeService 실행 (Ed25519 검증 + TOCTOU-safe DB upsert + JWT 발급)
+    match state.did_service.exchange(passport, &state.db).await {
+        Ok(visa_response) => {
+            // 레퍼럴 처리 (신규 에이전트만 적용, 런타임 쿼리)
+            if let Some(ref ref_did) = req.referrer_did {
+                let _ = sqlx::query(
+                    r#"
+                    UPDATE local_visas
+                    SET referrer_did = $1
+                    WHERE global_did  = $2
+                      AND referrer_did IS NULL
+                    "#,
+                )
+                .bind(ref_did)
+                .bind(&req.global_did)
+                .execute(&state.db)
+                .await;
+            }
+
+            HttpResponse::Ok().json(json!({
+                "local_did":            visa_response.local_did,
+                "token":                visa_response.session_token,
+                "balance_bnkr":         visa_response.balance_bnkr,
+                "reputation_score":     visa_response.reputation_score,
+                "free_calls_remaining": visa_response.free_calls_remaining,
+                "accepted_tokens":      ["BNKR","USDC","USDT","ETH","SOL","CLANKER","VIRTUAL"],
+                "message":              visa_response.message,
+            }))
+        }
+        Err(e) => {
+            let (status, code) = match &e {
+                auth::AuthError::SignatureVerificationFailed(_) =>
+                    (actix_web::http::StatusCode::UNAUTHORIZED, "signature_invalid"),
+                auth::AuthError::InvalidDidFormat(_) =>
+                    (actix_web::http::StatusCode::BAD_REQUEST, "did_format_invalid"),
+                auth::AuthError::NonceReuse =>
+                    (actix_web::http::StatusCode::CONFLICT, "nonce_reuse"),
+                auth::AuthError::DatabaseError(_) =>
+                    (actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "db_error"),
+                _ =>
+                    (actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
+            };
+            HttpResponse::build(status).json(json!({
+                "error": code,
+                "message": e.to_string(),
+            }))
+        }
     }
-
-    let _ = sqlx::query!(
-        r#"
-        INSERT INTO local_visas (local_did, global_did, public_key, referrer_did,
-            balance_bnkr, total_calls, created_at, last_seen)
-        VALUES ($1, $2, $3, $4, 0.0, 0, NOW(), NOW())
-        ON CONFLICT (local_did) DO UPDATE
-            SET last_seen    = NOW(),
-                referrer_did = COALESCE(local_visas.referrer_did, EXCLUDED.referrer_did)
-        "#,
-        req.global_did, req.global_did, req.public_key, req.referrer_did,
-    ).execute(&state.db).await;
-
-    let token = format!("helm-jwt-{}", ulid::Ulid::new());
-
-    HttpResponse::Ok().json(json!({
-        "local_did": req.global_did,
-        "token": token,
-        "balance_bnkr": 0.0,
-        "free_calls_remaining": 100,
-        "accepted_tokens": ["BNKR","USDC","USDT","ETH","SOL","CLANKER","VIRTUAL"],
-        "message": "Welcome to Helm-sense Gateway. 지능 주권 헌장 2026.",
-    }))
 }
 
 // ── Token Price Table ─────────────────────────────────────────────

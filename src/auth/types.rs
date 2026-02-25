@@ -14,15 +14,21 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// 글로벌 DID — 에이전트의 여권
-/// 외부 표준 (did:ethr, did:key, ENS 등) 모두 수용
+/// 외부 표준 (did:helm, did:ethr, did:key 등) 모두 수용
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalPassport {
-    /// did:ethr:0xABC... 형식
+    /// DID 형식:
+    ///   did:helm:<base58(sha3(pubkey))>  — Helm CLI 기본
+    ///   did:ethr:0xABC...               — EVM 계열
+    ///   did:key:<hex>                   — 범용 key DID
     pub did: String,
     /// Ed25519 서명 (신원 증명)
     pub signature: Vec<u8>,
     /// 서명 대상 메시지 (재사용 공격 방지를 위한 nonce 포함)
     pub signed_message: String,
+    /// Ed25519 공개키 (hex) — did:helm: 포맷에서 필수
+    /// did:helm: 은 DID 자체가 pubkey 해시이므로 별도 전달
+    pub public_key: Option<String>,
 }
 
 /// 로컬 Visa — 게이트웨이 내부 신원증
