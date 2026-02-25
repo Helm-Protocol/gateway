@@ -241,7 +241,7 @@ mod tests {
 
         // Verify billing
         assert_eq!(api.billing().call_count(), 1);
-        assert!(api.billing().helm_treasury() > 0);
+        assert!(api.billing().treasury_balance() > 0);
     }
 
     #[test]
@@ -277,7 +277,7 @@ mod tests {
         }
 
         // Health checks are free
-        assert_eq!(api.billing().total_revenue(), 0);
+        assert_eq!(api.billing().total_api_revenue(), 0);
 
         // GRG calls cost 10
         api.handle("agent-bnkr", EdgeRequest::GrgEncode {
@@ -285,8 +285,8 @@ mod tests {
             mode: GrgMode::Turbo,
         }, 5000);
 
-        assert_eq!(api.billing().total_revenue(), 10);
-        assert_eq!(api.billing().helm_treasury(), 2); // ceil(10 * 0.15)
-        assert_eq!(api.billing().operator_revenue(), 8);
+        // 85% treasury, 15% referrer; no referrer → 100% to treasury
+        assert_eq!(api.billing().total_api_revenue(), 10);
+        assert_eq!(api.billing().treasury_balance(), 10);
     }
 }
