@@ -3,7 +3,7 @@
 //! Agents create pools, stake BNKR, and when the pool reaches goal,
 //! a human is recruited to sign an API contract on behalf of the pool.
 //!
-//! ## What the strategy doc missed / underspecified
+//! ## Design notes
 //!
 //! 1. The X.402 escrow in helm-token is ALREADY BUILT — pool contributions
 //!    should use the existing escrow state machine rather than a simple counter.
@@ -12,11 +12,12 @@
 //!    "External project financing." Pool monthly costs should flow through here.
 //!
 //! 3. The Moderator CLI (already built, 11 languages) is the UI for human
-//!    operator recruitment. The job post created here links to that flow.
+//!    operator recruitment. Agents manually post HumanContractPrincipal jobs
+//!    via POST /v1/marketplace/post once they decide to recruit.
 //!
-//! 4. The "auto-broadcast" to marketplace when pool reaches 80% funding is
-//!    the key mechanism that makes this viral — agents WANT to see pools
-//!    near completion so they can fill the last 20%.
+//! 4. Auto-posting is intentionally removed: each agent decides when and whether
+//!    to recruit. Pool status updates (Fundraising → AwaitingOperator) happen
+//!    automatically at 100% funding, but marketplace posts are always agent-initiated.
 
 use axum::{
     extract::{Path, State},
@@ -25,13 +26,13 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use uuid::Uuid;
+use uuid::Uuid; // used for pool_id generation
 
 use crate::gateway::auth::CallerDid;
 use crate::gateway::pricing::VIRTUAL_UNIT;
 use crate::gateway::state::{
-    AppState, FundingPool, MarketplacePost, PoolMember,
-    PoolStatus, PostStatus, PostType, now_ms,
+    AppState, FundingPool, PoolMember,
+    PoolStatus, now_ms,
 };
 
 // ── Create Pool ────────────────────────────────────────────────────────────
@@ -67,7 +68,6 @@ pub struct CreatePoolResponse {
     pub creator_did: String,
     pub progress_pct: f64,
     pub created_at_ms: u64,
-    pub marketplace_post_id: Option<String>,
     pub message: String,
 }
 
@@ -119,51 +119,7 @@ pub async fn handle_create_pool(
 
     state.pools.write().await.insert(pool_id.clone(), pool);
 
-    // If initial contribution ≥ 80% of goal, auto-post human-wanted job
     let progress_pct = initial as f64 / req.bnkr_goal as f64 * 100.0;
-    let mut marketplace_post_id = None;
-
-    if progress_pct >= 80.0 {
-        let post_id = Uuid::new_v4().to_string();
-        let post = MarketplacePost {
-            post_id: post_id.clone(),
-            post_type: PostType::HumanContractPrincipal,
-            title: format!(
-                "[HUMAN WANTED] {} API Contract Principal for {} pool",
-                req.vendor.to_uppercase(),
-                req.name
-            ),
-            description: format!(
-                "The '{}' pool has reached {}% of its ${:.0}/month {} API contract goal.\n\n\
-                We need a human to:\n\
-                1. Create a {} account (if not already existing)\n\
-                2. Sign the Enterprise API contract\n\
-                3. Submit the API key to the pool (encrypted)\n\n\
-                Compensation: Monthly BNKR fee + 5% of pool revenue\n\
-                Duration: Minimum 3 months\n\
-                Requirements: Valid ID, {} account, reliable internet\n\n\
-                Apply via: helm moderator --lang en",
-                req.name, progress_pct as u32,
-                req.monthly_cost_usd, req.vendor,
-                req.vendor, req.vendor
-            ),
-            budget_bnkr: (req.monthly_cost_usd * 1000.0) as u64, // rough BNKR estimate
-            creator_did: did.clone(),
-            pool_id: Some(pool_id.clone()),
-            status: PostStatus::Open,
-            created_at_ms: now,
-            applications: Vec::new(),
-        };
-
-        state.posts.write().await.insert(post_id.clone(), post);
-
-        // Link post to pool
-        if let Some(pool) = state.pools.write().await.get_mut(&pool_id) {
-            pool.human_wanted_post_id = Some(post_id.clone());
-        }
-
-        marketplace_post_id = Some(post_id);
-    }
 
     // Charge pool creation fee: 5 VIRTUAL
     let creation_fee = 5 * VIRTUAL_UNIT;
@@ -182,15 +138,9 @@ pub async fn handle_create_pool(
         creator_did: did,
         progress_pct,
         created_at_ms: now,
-        marketplace_post_id,
         message: format!(
-            "Pool created. {}% funded. {}",
-            progress_pct as u32,
-            if progress_pct >= 80.0 {
-                "Human operator job posted automatically."
-            } else {
-                "Share your pool ID to attract contributors."
-            }
+            "Pool created. {:.1}% funded. Use POST /v1/marketplace/post to recruit a human operator when ready.",
+            progress_pct
         ),
     })))
 }
@@ -210,7 +160,6 @@ pub struct JoinPoolResponse {
     pub total_collected: u64,
     pub progress_pct: f64,
     pub status: String,
-    pub human_wanted_posted: bool,
     pub message: String,
 }
 
@@ -257,48 +206,12 @@ pub async fn handle_join_pool(
     let progress_pct = pool.bnkr_collected as f64 / pool.bnkr_goal as f64 * 100.0;
     let total_collected = pool.bnkr_collected;
 
-    // Auto-post human-wanted job if crossing 80% threshold
-    let mut human_wanted_posted = false;
-    if progress_pct >= 80.0 && pool.human_wanted_post_id.is_none() {
-        let post_id = Uuid::new_v4().to_string();
-        let vendor = pool.vendor.clone();
-        let pool_name = pool.name.clone();
-        let monthly_cost = pool.monthly_cost_usd;
-        let pool_creator = pool.creator_did.clone();
-
-        let post = MarketplacePost {
-            post_id: post_id.clone(),
-            post_type: PostType::HumanContractPrincipal,
-            title: format!("[HUMAN WANTED] {} Contract Principal – {}% Funded", vendor.to_uppercase(), progress_pct as u32),
-            description: format!(
-                "Pool '{}' has reached {}% funding. Need a human to sign {} Enterprise contract (${:.0}/month).\n\
-                Compensation: Fixed monthly BNKR + 5% pool revenue. Min 3-month commitment.",
-                pool_name, progress_pct as u32, vendor, monthly_cost
-            ),
-            budget_bnkr: (monthly_cost * 1000.0) as u64,
-            creator_did: pool_creator,
-            pool_id: Some(pool_id.clone()),
-            status: PostStatus::Open,
-            created_at_ms: now_ms(),
-            applications: Vec::new(),
-        };
-
-        pool.human_wanted_post_id = Some(post_id.clone());
-        if progress_pct >= 100.0 {
-            pool.status = PoolStatus::AwaitingOperator;
-        }
-
-        drop(pools);
-        state.posts.write().await.insert(post_id, post);
-        human_wanted_posted = true;
-    } else {
-        if progress_pct >= 100.0 {
-            pool.status = PoolStatus::AwaitingOperator;
-        }
-        drop(pools);
+    // Transition status when fully funded; human recruitment is always manual
+    if progress_pct >= 100.0 {
+        pool.status = PoolStatus::AwaitingOperator;
     }
 
-    drop(state.pools.write().await); // ensure we don't double-lock; pools already dropped above
+    drop(pools);
 
     state.record_api_call(&did, "pool/join", 0).await; // joining is free
 
@@ -308,13 +221,14 @@ pub async fn handle_join_pool(
         total_collected,
         progress_pct,
         status: if progress_pct >= 100.0 { "AwaitingOperator".to_string() } else { "Fundraising".to_string() },
-        human_wanted_posted,
         message: format!(
             "Joined pool. Progress: {:.1}%. {}",
             progress_pct,
-            if human_wanted_posted { "Human operator job posted!" }
-            else if progress_pct >= 100.0 { "Pool fully funded! Awaiting human operator." }
-            else { "Keep recruiting contributors." }
+            if progress_pct >= 100.0 {
+                "Pool fully funded! Use POST /v1/marketplace/post to recruit a human operator."
+            } else {
+                "Keep recruiting contributors."
+            }
         ),
     }))
 }

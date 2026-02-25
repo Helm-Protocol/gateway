@@ -15,13 +15,19 @@
 //!   DELETE /v1/sense/memory/:key       → E-Line: delete memory value
 //!
 //! ### Data Pipeline
-//!   POST   /v1/synco/stream            → G-Line: Sync-O (GRG codec)
+//!   POST   /v1/synco/stream            → G-Line: Sync-O encode (GRG codec, $1.50/GB)
+//!   POST   /v1/synco/decode            → G-Line: Sync-O decode (GRG recover, $1.00/GB)
 //!
 //! ### Pool (Pool 해자)
 //!   POST   /v1/pool                    → Create funding pool
 //!   GET    /v1/pool                    → List all pools
 //!   GET    /v1/pool/:id                → Pool status
 //!   POST   /v1/pool/:id/join           → Join pool with stake
+//!
+//! ### Marketplace (agent-initiated)
+//!   POST   /v1/marketplace/post        → Create job / subcontract / HumanContractPrincipal post
+//!   GET    /v1/marketplace/post        → List open posts
+//!   POST   /v1/marketplace/post/:id/apply → Apply to a post
 //!
 //! ### Packages
 //!   POST   /v1/package/alpha-hunt      → Package 1: DeFi signal pipeline
@@ -50,10 +56,11 @@ use crate::gateway::handlers::{
     cortex::handle_cortex,
     earnings::{handle_earnings, handle_leaderboard},
     fico::handle_fico,
+    marketplace::{handle_apply, handle_create_post, handle_list_posts},
     memory::{handle_memory_del, handle_memory_get, handle_memory_list, handle_memory_put},
     packages::{handle_alpha_hunt, handle_protocol_shield},
     pool::{handle_create_pool, handle_join_pool, handle_list_pools, handle_pool_status},
-    synco::handle_synco,
+    synco::{handle_synco, handle_synco_decode},
 };
 use crate::gateway::state::AppState;
 
@@ -75,6 +82,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/sense/memory/:key",     delete(handle_memory_del))
         // Data pipeline
         .route("/v1/synco/stream",          post(handle_synco))
+        .route("/v1/synco/decode",          post(handle_synco_decode))
         // Identity
         .route("/v1/agent/:did/credit",     get(handle_fico))
         .route("/v1/agent/:did/earnings",   get(handle_earnings))
@@ -83,6 +91,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/pool",                  get(handle_list_pools))
         .route("/v1/pool/:id",              get(handle_pool_status))
         .route("/v1/pool/:id/join",         post(handle_join_pool))
+        // Marketplace (manual agent-initiated posts)
+        .route("/v1/marketplace/post",      post(handle_create_post))
+        .route("/v1/marketplace/post",      get(handle_list_posts))
+        .route("/v1/marketplace/post/:id/apply", post(handle_apply))
         // Packages
         .route("/v1/package/alpha-hunt",    post(handle_alpha_hunt))
         .route("/v1/package/protocol-shield", post(handle_protocol_shield))

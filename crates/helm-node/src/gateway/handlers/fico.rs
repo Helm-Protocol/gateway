@@ -16,12 +16,12 @@
 //! Community, Governance). The FICO score is just a weighted projection
 //! of the existing reputation data + API usage history.
 //!
-//! ## The Trust Transaction Use Case
+//! ## The Trust Transaction Use Case (v3.0)
 //!
-//! Score ≥ 700: trade without escrow (direct X.402 settlement)
-//! Score < 700: require X.402 escrow (already built in helm-token)
+//! Score ≥ 750 (PRIME): trade without escrow (direct X.402 settlement)
+//! Score < 750: require X.402 escrow (already built in helm-token)
 //!
-//! This saves the escrow fee (2% of transaction value) for high-score agents,
+//! This saves the escrow fee (2% of transaction value) for PRIME agents,
 //! creating a strong incentive to maintain reputation.
 
 use axum::{extract::{Path, State}, http::StatusCode, Extension, Json};
@@ -64,9 +64,9 @@ pub struct FicoResponse {
 
 #[derive(Debug, Serialize)]
 pub enum CreditBand {
-    /// 750–850: Excellent
+    /// 750–850: PRIME — escrow-exempt (v3.0)
     Excellent,
-    /// 700–749: Good — escrow-exempt
+    /// 700–749: Good — escrow required
     Good,
     /// 650–699: Fair — escrow required
     Fair,
@@ -211,11 +211,12 @@ pub async fn handle_fico(
         _ => CreditBand::Unscored,
     };
 
-    let escrow_exempt = score >= 700;
+    // v3.0: PRIME threshold is 750 (escrow-exempt for peer contracts)
+    let escrow_exempt = score >= 750;
 
-    // Max no-escrow transaction size: 100 BNKR per score point above 700
+    // Max no-escrow transaction size: 100 BNKR per score point above 750 (PRIME baseline)
     let max_no_escrow_bnkr = if escrow_exempt {
-        (score - 700) as u64 * 100
+        (score - 750) as u64 * 100
     } else {
         0
     };

@@ -109,67 +109,72 @@ pub mod packages {
     pub const HELM_CHANNEL_BPS: u64 = 1500;
 }
 
-/// Calculate G-metric zone pricing premium.
+/// G-metric zone label (v3.0 spec).
 ///
-/// ## What the doc missed
-///
-/// The doc shows G zones as marketing tiers (0.00-0.20, 0.20-0.60, etc.)
-/// but the code uses tanh-based G computation with a binary threshold at 0.4.
-/// This function maps the actual G values to premium pricing tiers.
-///
-/// The actual G formula in code:
-///   g_metric = 1.0 - max_score.tanh().max(0.0)
-///   where max_score = max dot product across all KV blocks
-///
-/// G zones (calibrated to code reality):
-///   G ∈ [0.0, 0.2] → "Known" → cache discount (0% premium)
-///   G ∈ [0.2, 0.4] → "Uncertain" → 25% premium
-///   G ∈ [0.4, 0.6] → "Gap" (code threshold hit) → 50% premium + Ghost Tokens
-///   G ∈ [0.6, 0.8] → "Unknown" → 100% premium + auto-questions
-///   G ∈ [0.8, 1.0] → "Novelty" → 200% premium + knowledge update credit
-pub fn g_metric_price_multiplier(g: f32) -> f64 {
+/// Zones are named KNOWN / FAMILIAR / PARTIAL / NOVEL / FRONTIER.
+/// Boundaries: 0.0 / 0.1 / 0.3 / 0.6 / 0.85 / 1.0
+pub fn g_zone_label(g: f32) -> &'static str {
     match g {
-        g if g < 0.20 => 1.0,   // Known: base price
-        g if g < 0.40 => 1.25,  // Uncertain: +25%
-        g if g < 0.60 => 1.50,  // Gap: +50%
-        g if g < 0.80 => 2.00,  // Unknown: +100%
-        _              => 3.00, // Novelty: +200%
+        g if g < 0.10 => "KNOWN",
+        g if g < 0.30 => "FAMILIAR",
+        g if g < 0.60 => "PARTIAL",
+        g if g < 0.85 => "NOVEL",
+        _              => "FRONTIER",
     }
 }
 
-/// Ghost Token vocabulary for Sense Cortex output.
+/// Calculate G-metric zone pricing premium (v3.0 spec).
 ///
-/// ## What the doc missed
+/// ## v3.0 zone boundaries
+///   G ∈ [0.00, 0.10) → KNOWN     → Base Toll (1.0×)
+///   G ∈ [0.10, 0.30) → FAMILIAR  → +40% (1.4×)
+///   G ∈ [0.30, 0.60) → PARTIAL   → +70% (1.7×) + Ghost Tokens begin
+///   G ∈ [0.60, 0.85) → NOVEL     → +100% (2.0×) + Ghost Tokens required
+///   G ∈ [0.85, 1.00] → FRONTIER  → +150% (2.5×) + knowledge-update credit
 ///
-/// The doc shows Ghost Tokens like "[MISSING: FED_RATE_HISTORY]" which implies
-/// NLP extraction of concepts from attention vectors. Without an NLP layer,
-/// we generate positional Ghost Tokens from the gap vector's dominant dimensions.
-/// The 12 domain categories map to the 64-dim attention space (HEAD_DIM=64):
-///   dims 0-5:   Market/DeFi signals
-///   dims 6-11:  Protocol data (Akash, Walrus, IPFS...)
-///   dims 12-17: Macro events (Fed, GDP, CPI...)
-///   dims 18-23: On-chain metrics (TVL, whale movements...)
-///   dims 24-29: Agent behavior patterns
-///   dims 30-35: Computation / GPU markets
-///   dims 36-41: Storage markets
-///   dims 42-47: Network topology
-///   dims 48-53: Identity / trust
-///   dims 54-59: Governance / DAO
-///   dims 60-63: Misc / custom
+/// ## G formula (v3.0)
+///   G = 1 − tanh(λ · Jaccard(Q, K)),  λ = 3.5
+///   where Jaccard is over token-set intersection/union of Q and K vectors
+pub fn g_metric_price_multiplier(g: f32) -> f64 {
+    match g {
+        g if g < 0.10 => 1.0,  // KNOWN: base price
+        g if g < 0.30 => 1.4,  // FAMILIAR: +40%
+        g if g < 0.60 => 1.7,  // PARTIAL: +70%
+        g if g < 0.85 => 2.0,  // NOVEL: +100%
+        _              => 2.5, // FRONTIER: +150%
+    }
+}
+
+/// Ghost Token vocabulary for Sense Cortex output (v3.0 DeFi-specific domains).
+///
+/// Ghost Tokens are generated from the gap vector's dominant dimensions.
+/// The 12 DeFi-specific domains map to the 64-dim attention space (HEAD_DIM=64):
+///   dims 0-5:   Macro rate / monetary policy signals
+///   dims 6-11:  ETH/BTC macro price correlation
+///   dims 12-17: DeFi protocol TVL and liquidity
+///   dims 18-23: Whale wallet movements
+///   dims 24-29: MEV / sandwich risk signals
+///   dims 30-35: Market sentiment (fear/greed, funding rates)
+///   dims 36-41: Regulatory / legal context
+///   dims 42-47: Prediction market odds (Polymarket etc.)
+///   dims 48-51: L2 bridge activity and gas
+///   dims 52-55: Stablecoin flow and de-peg risk
+///   dims 56-59: NFT collection floor / royalty data
+///   dims 60-63: Protocol governance proposals
 pub fn generate_ghost_tokens(missing_intent: &[f32]) -> Vec<String> {
     let domains = [
-        "DEFI_SIGNAL",
-        "PROTOCOL_DATA",
-        "MACRO_EVENT",
-        "ONCHAIN_METRIC",
-        "AGENT_BEHAVIOR",
-        "GPU_MARKET",
-        "STORAGE_MARKET",
-        "NETWORK_TOPOLOGY",
-        "IDENTITY_TRUST",
-        "GOVERNANCE_DAO",
-        "REGULATORY_EVENT",
-        "CUSTOM_CONTEXT",
+        "FED_RATE_HISTORY",
+        "ETH_MACRO_CORRELATION",
+        "DEFI_TVL_DATA",
+        "WHALE_MOVEMENTS",
+        "MEV_RISK",
+        "MARKET_SENTIMENT",
+        "REGULATORY_CONTEXT",
+        "POLYMARKET_ODDS",
+        "L2_BRIDGE_ACTIVITY",
+        "STABLECOIN_FLOWS",
+        "NFT_COLLECTION_DATA",
+        "PROTOCOL_GOVERNANCE",
     ];
 
     let mut ghost_tokens = Vec::new();

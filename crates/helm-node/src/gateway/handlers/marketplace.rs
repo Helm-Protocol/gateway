@@ -1,0 +1,232 @@
+//! Marketplace endpoints — agents manually post jobs, subcontracts, and
+//! HumanContractPrincipal listings.
+//!
+//! Human operator recruitment is intentionally manual: the pool creator
+//! decides when the pool is ready and posts the listing themselves.
+//! This preserves agent autonomy and prevents spam from automatic triggers.
+
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    Extension, Json,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use uuid::Uuid;
+
+use crate::gateway::auth::CallerDid;
+use crate::gateway::state::{
+    AppState, Application, MarketplacePost, PostStatus, PostType, now_ms,
+};
+
+// ── Create Post ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct CreatePostRequest {
+    /// "Job" | "Subcontract" | "HumanContractPrincipal"
+    pub post_type: String,
+    pub title: String,
+    pub description: String,
+    /// Budget in BNKR micro-units
+    pub budget_bnkr: u64,
+    /// Optional: link this post to a pool (required for HumanContractPrincipal)
+    pub pool_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreatePostResponse {
+    pub post_id: String,
+    pub post_type: String,
+    pub title: String,
+    pub budget_bnkr: u64,
+    pub pool_id: Option<String>,
+    pub status: String,
+    pub created_at_ms: u64,
+    pub message: String,
+}
+
+pub async fn handle_create_post(
+    State(state): State<AppState>,
+    Extension(CallerDid(did)): Extension<CallerDid>,
+    Json(req): Json<CreatePostRequest>,
+) -> Result<(StatusCode, Json<CreatePostResponse>), (StatusCode, Json<serde_json::Value>)> {
+    if req.title.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "title_required"}))));
+    }
+    if req.description.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "description_required"}))));
+    }
+
+    let post_type = match req.post_type.as_str() {
+        "Job" => PostType::Job,
+        "Subcontract" => PostType::Subcontract,
+        "HumanContractPrincipal" => PostType::HumanContractPrincipal,
+        other => return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "invalid_post_type",
+                "valid": ["Job", "Subcontract", "HumanContractPrincipal"],
+                "received": other,
+            })),
+        )),
+    };
+
+    // HumanContractPrincipal must reference a real pool
+    if matches!(post_type, PostType::HumanContractPrincipal) {
+        match &req.pool_id {
+            None => return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "pool_id_required_for_human_contract_principal"})),
+            )),
+            Some(pid) => {
+                let pools = state.pools.read().await;
+                if !pools.contains_key(pid.as_str()) {
+                    return Err((
+                        StatusCode::NOT_FOUND,
+                        Json(json!({"error": "pool_not_found", "pool_id": pid})),
+                    ));
+                }
+            }
+        }
+    }
+
+    let post_id = Uuid::new_v4().to_string();
+    let now = now_ms();
+    let post_type_str = format!("{:?}", post_type);
+
+    let post = MarketplacePost {
+        post_id: post_id.clone(),
+        post_type,
+        title: req.title.clone(),
+        description: req.description.clone(),
+        budget_bnkr: req.budget_bnkr,
+        creator_did: did.clone(),
+        pool_id: req.pool_id.clone(),
+        status: PostStatus::Open,
+        created_at_ms: now,
+        applications: Vec::new(),
+    };
+
+    // If this is a HumanContractPrincipal, link back to pool
+    if let Some(pid) = &req.pool_id {
+        if matches!(&post.post_type, PostType::HumanContractPrincipal) {
+            if let Some(pool) = state.pools.write().await.get_mut(pid.as_str()) {
+                pool.human_wanted_post_id = Some(post_id.clone());
+            }
+        }
+    }
+
+    state.posts.write().await.insert(post_id.clone(), post);
+
+    tracing::info!(
+        "Marketplace post created: {} type={} by={}",
+        post_id, post_type_str, did
+    );
+
+    Ok((StatusCode::CREATED, Json(CreatePostResponse {
+        post_id,
+        post_type: post_type_str,
+        title: req.title,
+        budget_bnkr: req.budget_bnkr,
+        pool_id: req.pool_id,
+        status: "Open".to_string(),
+        created_at_ms: now,
+        message: "Post created. Agents and humans can now apply.".to_string(),
+    })))
+}
+
+// ── List Posts ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct PostSummary {
+    pub post_id: String,
+    pub post_type: String,
+    pub title: String,
+    pub budget_bnkr: u64,
+    pub pool_id: Option<String>,
+    pub status: String,
+    pub application_count: usize,
+    pub creator_did: String,
+    pub created_at_ms: u64,
+}
+
+pub async fn handle_list_posts(
+    State(state): State<AppState>,
+    Extension(CallerDid(_did)): Extension<CallerDid>,
+) -> Json<serde_json::Value> {
+    let posts = state.posts.read().await;
+    let summaries: Vec<PostSummary> = posts
+        .values()
+        .filter(|p| p.status == PostStatus::Open)
+        .map(|p| PostSummary {
+            post_id: p.post_id.clone(),
+            post_type: format!("{:?}", p.post_type),
+            title: p.title.clone(),
+            budget_bnkr: p.budget_bnkr,
+            pool_id: p.pool_id.clone(),
+            status: format!("{:?}", p.status),
+            application_count: p.applications.len(),
+            creator_did: p.creator_did.clone(),
+            created_at_ms: p.created_at_ms,
+        })
+        .collect();
+
+    Json(json!({ "posts": summaries, "total": summaries.len() }))
+}
+
+// ── Apply to Post ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct ApplyRequest {
+    pub proposal: String,
+}
+
+pub async fn handle_apply(
+    State(state): State<AppState>,
+    Extension(CallerDid(did)): Extension<CallerDid>,
+    Path(post_id): Path<String>,
+    Json(req): Json<ApplyRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if req.proposal.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "proposal_required"}))));
+    }
+
+    let mut posts = state.posts.write().await;
+    let post = posts.get_mut(&post_id).ok_or_else(|| (
+        StatusCode::NOT_FOUND,
+        Json(json!({"error": "post_not_found", "post_id": post_id})),
+    ))?;
+
+    if post.status != PostStatus::Open {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({"error": "post_closed", "status": format!("{:?}", post.status)})),
+        ));
+    }
+
+    // Prevent duplicate applications from same DID
+    if post.applications.iter().any(|a| a.applicant_did == did) {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({"error": "already_applied"})),
+        ));
+    }
+
+    post.applications.push(Application {
+        applicant_did: did.clone(),
+        proposal: req.proposal.clone(),
+        applied_at_ms: now_ms(),
+        accepted: false,
+    });
+
+    let application_count = post.applications.len();
+
+    tracing::info!("Application submitted to post {} by {}", post_id, did);
+
+    Ok(Json(json!({
+        "post_id": post_id,
+        "applicant_did": did,
+        "application_count": application_count,
+        "message": "Application submitted. The post creator will review and accept.",
+    })))
+}

@@ -64,6 +64,7 @@ pub async fn start_gateway(port: u16, public_url: Option<String>) -> Result<()> 
     println!("║    E-Line  Sense Memory   GET/PUT /v1/sense/memory/:key  ║");
     println!("║    D-Line  FICO Score     GET /v1/agent/:did/credit      ║");
     println!("║    Pool    HelmPool       POST /v1/pool                  ║");
+    println!("║    Market  Marketplace    POST /v1/marketplace/post      ║");
     println!("║    Graph   Earnings       GET /v1/agent/:did/earnings    ║");
     println!("╠══════════════════════════════════════════════════════════╣");
     println!("║  Packages:                                               ║");

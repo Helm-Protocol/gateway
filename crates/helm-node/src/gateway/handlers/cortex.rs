@@ -94,25 +94,25 @@ pub struct CortexResponse {
 
 #[derive(Debug, Serialize)]
 pub enum ConfidenceZone {
-    /// G < 0.20: agent knows this well
-    High,
-    /// G 0.20-0.40: some uncertainty
-    Medium,
-    /// G 0.40-0.60: knowledge gap detected (Socratic Claw threshold)
-    Low,
-    /// G 0.60-0.80: significant gap, action not recommended
-    Critical,
-    /// G > 0.80: complete novelty, stop and investigate
-    Novelty,
+    /// G < 0.10: agent knows this well (v3.0 KNOWN zone)
+    Known,
+    /// G 0.10-0.30: slight uncertainty (v3.0 FAMILIAR zone)
+    Familiar,
+    /// G 0.30-0.60: knowledge gap detected (v3.0 PARTIAL zone, Socratic Claw threshold)
+    Partial,
+    /// G 0.60-0.85: significant gap, Ghost Tokens required (v3.0 NOVEL zone)
+    Novel,
+    /// G > 0.85: complete novelty, knowledge update credit (v3.0 FRONTIER zone)
+    Frontier,
 }
 
 #[derive(Debug, Serialize)]
 pub enum RecommendedAction {
-    /// G < 0.40: proceed with action
+    /// G < 0.30 (KNOWN/FAMILIAR): proceed with action
     Proceed,
-    /// G 0.40-0.60: gather more info, then act
+    /// G 0.30-0.60 (PARTIAL): gather more info before acting
     QueryBeforeAct,
-    /// G > 0.60: halt completely, resolve gaps first
+    /// G > 0.60 (NOVEL/FRONTIER): halt, resolve gaps and fill Ghost Tokens first
     HaltAndInvestigate,
 }
 
@@ -249,17 +249,17 @@ pub async fn handle_cortex(
         }
     };
 
-    // Determine confidence zone and action
+    // Determine confidence zone and action (v3.0 boundaries: 0/0.10/0.30/0.60/0.85/1.0)
     let confidence = match g_score {
-        g if g < 0.20 => ConfidenceZone::High,
-        g if g < 0.40 => ConfidenceZone::Medium,
-        g if g < 0.60 => ConfidenceZone::Low,
-        g if g < 0.80 => ConfidenceZone::Critical,
-        _              => ConfidenceZone::Novelty,
+        g if g < 0.10 => ConfidenceZone::Known,
+        g if g < 0.30 => ConfidenceZone::Familiar,
+        g if g < 0.60 => ConfidenceZone::Partial,
+        g if g < 0.85 => ConfidenceZone::Novel,
+        _              => ConfidenceZone::Frontier,
     };
 
     let action = match g_score {
-        g if g < 0.40 => RecommendedAction::Proceed,
+        g if g < 0.30 => RecommendedAction::Proceed,
         g if g < 0.60 => RecommendedAction::QueryBeforeAct,
         _              => RecommendedAction::HaltAndInvestigate,
     };
@@ -270,18 +270,20 @@ pub async fn handle_cortex(
         let domain = gt
             .trim_start_matches("[MISSING: ")
             .trim_end_matches(']');
+        // v3.0 DeFi-specific Ghost Token questions
         match domain {
-            "DEFI_SIGNAL" => "What are the current DeFi market conditions and recent signal patterns?",
-            "MACRO_EVENT" => "What recent macro events (Fed decisions, CPI, GDP) are relevant?",
-            "ONCHAIN_METRIC" => "What are the current on-chain metrics (TVL, whale movements, gas)?",
-            "AGENT_BEHAVIOR" => "How have similar agents behaved in this situation recently?",
-            "GPU_MARKET" => "What is the current state of the GPU compute market (Akash, io.net)?",
-            "STORAGE_MARKET" => "What is the current distributed storage market state (Walrus, IPFS)?",
-            "GOVERNANCE_DAO" => "Are there recent governance proposals affecting this decision?",
-            "PROTOCOL_DATA" => "What protocol-specific data is needed for this computation?",
-            "IDENTITY_TRUST" => "What are the trust scores and reputation data for involved parties?",
-            "NETWORK_TOPOLOGY" => "What is the current network topology and peer availability?",
-            "REGULATORY_EVENT" => "Are there recent regulatory developments affecting this action?",
+            "FED_RATE_HISTORY"        => "What are the current Fed rate trajectory and monetary policy signals?",
+            "ETH_MACRO_CORRELATION"   => "How is ETH/BTC price correlated with current macro conditions?",
+            "DEFI_TVL_DATA"           => "What is the current DeFi TVL breakdown across major protocols?",
+            "WHALE_MOVEMENTS"         => "What large wallet movements are visible on-chain in the last 24h?",
+            "MEV_RISK"                => "What is the current MEV and sandwich attack risk for this action?",
+            "MARKET_SENTIMENT"        => "What does the current fear/greed index and funding rate say?",
+            "REGULATORY_CONTEXT"      => "Are there recent regulatory developments affecting this position?",
+            "POLYMARKET_ODDS"         => "What are the Polymarket prediction market odds for related events?",
+            "L2_BRIDGE_ACTIVITY"      => "What is the current L2 bridge volume and gas cost differential?",
+            "STABLECOIN_FLOWS"        => "Are there stablecoin de-peg risks or unusual mint/burn flows?",
+            "NFT_COLLECTION_DATA"     => "What are the relevant NFT collection floor prices and royalty flows?",
+            "PROTOCOL_GOVERNANCE"     => "Are there active governance proposals affecting this protocol?",
             _ => "What additional context is needed before proceeding?",
         }.to_string()
     }).collect();
