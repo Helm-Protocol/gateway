@@ -14,19 +14,12 @@ use std::path::PathBuf;
 use anyhow::Result;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::gateway_commands::HelmConfig;
 use super::github_oauth;
 
 const DEFAULT_GATEWAY: &str = "https://gateway.helm.ag";
-
-pub struct InitResult {
-    pub did: String,
-    pub gateway_url: String,
-    pub is_new: bool,
-}
 
 /// `helm init [--gateway <url>] [--referrer <did>] [--github] [--force]`
 pub async fn cmd_init(
@@ -231,6 +224,8 @@ fn base64_encode(data: &[u8]) -> String {
 }
 
 /// Load the private key from ~/.helm/key.pem and reconstruct the SigningKey.
+/// Used by `helm api call` and other commands that need to sign requests.
+#[allow(dead_code)]
 pub fn load_signing_key() -> Result<SigningKey> {
     let key_path = helm_dir()?.join("key.pem");
     let pem = std::fs::read_to_string(&key_path)
@@ -249,15 +244,3 @@ pub fn load_signing_key() -> Result<SigningKey> {
     Ok(SigningKey::from_bytes(&arr))
 }
 
-// ── Additional config extension ───────────────────────────────────
-// Re-export so main.rs can use the full HelmConfig with github_login.
-
-/// Extended HelmConfig with GitHub login field.
-/// This is stored in ~/.helm/config.json.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ExtendedHelmConfig {
-    pub did: String,
-    pub gateway_url: String,
-    pub jwt_token: Option<String>,
-    pub github_login: Option<String>,
-}

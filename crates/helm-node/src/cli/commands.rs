@@ -174,6 +174,40 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_init_defaults() {
+        let cli = Cli::parse_from(["helm", "init"]);
+        match cli.command {
+            Some(Commands::Init { gateway, referrer, github, force }) => {
+                assert!(gateway.is_none());
+                assert!(referrer.is_none());
+                assert!(!github);
+                assert!(!force);
+            }
+            _ => panic!("expected Init command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_init_with_flags() {
+        let cli = Cli::parse_from([
+            "helm", "init",
+            "--gateway", "https://my-gw.example.com",
+            "--referrer", "did:helm:ABC123",
+            "--github",
+            "--force",
+        ]);
+        match cli.command {
+            Some(Commands::Init { gateway, referrer, github, force }) => {
+                assert_eq!(gateway, Some("https://my-gw.example.com".to_string()));
+                assert_eq!(referrer, Some("did:helm:ABC123".to_string()));
+                assert!(github);
+                assert!(force);
+            }
+            _ => panic!("expected Init command"),
+        }
+    }
+
+    #[test]
     fn cli_parses_run() {
         let cli = Cli::parse_from(["helm", "run", "--name", "my-node", "--port", "9735"]);
         match cli.command {

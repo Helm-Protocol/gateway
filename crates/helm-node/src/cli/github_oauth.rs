@@ -26,6 +26,8 @@ pub struct GitHubIdentity {
     pub login: String,
     pub id: u64,
     pub email: Option<String>,
+    /// Real name from GitHub profile (for display — may be None if user hides it).
+    #[allow(dead_code)]
     pub name: Option<String>,
 }
 
