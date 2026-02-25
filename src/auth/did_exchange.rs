@@ -40,6 +40,9 @@ pub struct DidExchangeService {
     /// TTL: 48h 경과 시 자동 제거 (JWT 유효기간 24h × 2 = 안전마진)
     /// 실제 운영에서는 Redis TTL SET NX로 대체
     used_nonces: parking_lot::RwLock<std::collections::HashMap<String, i64>>,
+    /// IP별 DID 등록 횟수: IP → (횟수, 윈도우 시작 Unix ts)
+    /// 1시간 슬라이딩 윈도우, IP당 최대 5회 (Sybil/스팸 방어)
+    ip_counts: parking_lot::RwLock<std::collections::HashMap<String, (u32, i64)>>,
 }
 
 impl DidExchangeService {
@@ -47,7 +50,30 @@ impl DidExchangeService {
         Self {
             jwt_secret: jwt_secret.as_bytes().to_vec(),
             used_nonces: parking_lot::RwLock::new(std::collections::HashMap::new()),
+            ip_counts:   parking_lot::RwLock::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// IP 레이트 리밋 체크 — DID 등록 스팸/Sybil 방어
+    ///
+    /// 1시간 슬라이딩 윈도우 내 IP당 최대 5회 등록 허용.
+    /// 실제 운영에서는 Redis INCR + EXPIRE로 대체할 것.
+    pub fn check_ip_rate_limit(&self, ip: &str) -> Result<(), super::types::AuthError> {
+        let now = Utc::now().timestamp();
+        const WINDOW_SECS: i64 = 3600; // 1시간
+        const MAX_REGS: u32    = 5;    // IP당 최대 5회
+
+        let mut counts = self.ip_counts.write();
+
+        // 윈도우 만료 엔트리 정리
+        counts.retain(|_, (_, window_start)| now - *window_start < WINDOW_SECS);
+
+        let entry = counts.entry(ip.to_string()).or_insert((0, now));
+        if entry.0 >= MAX_REGS {
+            return Err(super::types::AuthError::RateLimited);
+        }
+        entry.0 += 1;
+        Ok(())
     }
 
     /// JWT 검증 — 미들웨어 / auth guard용

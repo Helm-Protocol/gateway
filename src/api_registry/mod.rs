@@ -30,6 +30,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::auth::{self, DidExchangeService};
+use crate::billing::BillingLedger;
 use std::sync::Arc;
 
 // ============================
@@ -122,6 +123,7 @@ pub struct ApiRegistryState {
     pub db:          PgPool,
     pub http:        reqwest::Client,
     pub did_service: Arc<DidExchangeService>,
+    pub billing:     Arc<parking_lot::Mutex<BillingLedger>>,
 }
 
 // ============================
@@ -315,9 +317,14 @@ pub async fn subscribe(
         return HttpResponse::BadRequest().json(json!({"error": "already subscribed"}));
     }
 
-    // 구독 저장
+    // ── 원자적 트랜잭션: INSERT 구독 + UPDATE subscriber_count (Race Condition 방지) ──
     let sub_id = Uuid::new_v4();
-    let _ = sqlx::query(
+    let mut sub_tx = match state.db.begin().await {
+        Ok(t)  => t,
+        Err(e) => return HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
+    };
+
+    let insert = sqlx::query(
         r#"
         INSERT INTO api_subscriptions
             (id, subscriber_did, listing_id, owner_did, active, total_calls, total_paid_bnkr, subscribed_at)
@@ -328,18 +335,23 @@ pub async fn subscribe(
     .bind(req.subscriber_did.clone())
     .bind(req.listing_id)
     .bind(owner_did.clone())
-    .execute(&state.db).await;
+    .execute(&mut *sub_tx).await;
+
+    if let Err(e) = insert {
+        let _ = sub_tx.rollback().await;
+        return HttpResponse::InternalServerError().json(json!({"error": e.to_string()}));
+    }
 
     // ※ 레퍼럴은 helm init --referrer 로만 설정 (API 구독 시 자동 배정 금지)
-    //   이유: API 구독이 글로벌 레퍼럴을 오염시키는 버그 수정
-    //   API owner 수익은 proxy_call에서 owner_did 직접 결제로 처리
-
-    // subscriber_count 증가
     let _ = sqlx::query(
         "UPDATE api_listings SET subscriber_count = subscriber_count + 1 WHERE id = $1",
     )
     .bind(req.listing_id)
-    .execute(&state.db).await;
+    .execute(&mut *sub_tx).await;
+
+    if let Err(e) = sub_tx.commit().await {
+        return HttpResponse::InternalServerError().json(json!({"error": e.to_string()}));
+    }
 
     HttpResponse::Created().json(json!({
         "subscription_id": sub_id,
@@ -457,6 +469,28 @@ pub async fn proxy_call(
         return HttpResponse::InternalServerError().json(json!({"error": e.to_string()}));
     }
 
+    // ── BillingLedger 기록 (85/15 Treasury 추적) ──────────────────
+    {
+        let referrer_did: Option<String> = sqlx::query_scalar(
+            "SELECT referrer_did FROM local_visas WHERE local_did = $1",
+        )
+        .bind(req.caller_did.clone())
+        .fetch_one(&state.db).await.ok().flatten();
+
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        state.billing.lock().record_call(
+            &req.caller_did,
+            referrer_did.as_deref(),
+            &format!("api-registry/{}", req.listing_id),
+            1,
+            ts,
+        );
+    }
+
     // ── 실제 API 프록시 호출
     let api_result = state.http
         .post(&endpoint_url)
@@ -527,16 +561,22 @@ pub async fn proxy_call(
 }
 
 /// GET /api-registry/my-listings?did=<did>
-/// 내가 등록한 API 목록
+/// 내가 등록한 API 목록 (JWT 인증 필수 — 본인만 조회 가능)
 #[get("/api-registry/my-listings")]
 pub async fn my_listings(
-    state: web::Data<ApiRegistryState>,
-    query: web::Query<std::collections::HashMap<String, String>>,
+    state:    web::Data<ApiRegistryState>,
+    http_req: HttpRequest,
+    query:    web::Query<std::collections::HashMap<String, String>>,
 ) -> impl Responder {
     let did = match query.get("did") {
         Some(d) => d.clone(),
         None    => return HttpResponse::BadRequest().json(json!({"error": "did required"})),
     };
+
+    // JWT 인증 — 본인 listing만 조회 가능 (타인 수익 열람 차단)
+    if let Err(r) = auth::require_auth(&http_req, &did, &state.did_service) {
+        return r;
+    }
 
     let rows = sqlx::query(
         r#"

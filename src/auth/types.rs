@@ -137,4 +137,7 @@ pub enum AuthError {
 
     #[error("Nonce 재사용 공격 감지")]
     NonceReuse,
+
+    #[error("IP 레이트 리밋 초과 — 1시간에 최대 5번 DID 등록 가능")]
+    RateLimited,
 }

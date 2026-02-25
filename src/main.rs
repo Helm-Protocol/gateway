@@ -4,7 +4,7 @@
 // API 전선 A-B-C-D + Marketplace + Funding + API Reseller
 // 지원 토큰: BNKR · USDC · USDT · ETH · SOL · CLANKER · VIRTUAL
 
-use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{get, post, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -94,9 +94,32 @@ struct ExchangeRequest {
 
 #[post("/auth/exchange")]
 async fn did_exchange(
-    state: web::Data<AppState>,
-    req: web::Json<ExchangeRequest>,
+    state:    web::Data<AppState>,
+    http_req: HttpRequest,
+    req:      web::Json<ExchangeRequest>,
 ) -> impl Responder {
+    // IP 레이트 리밋 — Sybil/스팸 방어 (IP당 1시간에 최대 5회)
+    let client_ip = http_req
+        .headers()
+        .get("X-Forwarded-For")
+        .and_then(|v: &actix_web::http::header::HeaderValue| v.to_str().ok())
+        .and_then(|s: &str| s.split(',').next())
+        .map(|s: &str| s.trim().to_string())
+        .unwrap_or_else(|| {
+            http_req
+                .peer_addr()
+                .map(|a: std::net::SocketAddr| a.ip().to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        });
+
+    if let Err(e) = state.did_service.check_ip_rate_limit(&client_ip) {
+        return HttpResponse::TooManyRequests().json(json!({
+            "error": "rate_limited",
+            "message": e.to_string(),
+            "hint": "Maximum 5 DID registrations per IP per hour"
+        }));
+    }
+
     // signature hex → bytes 변환
     let sig_bytes = match hex::decode(&req.signature) {
         Ok(b) => b,
@@ -319,7 +342,7 @@ async fn main() -> std::io::Result<()> {
     let g_engine = Arc::new(filter::GMetricEngine::default());
     let tariff   = Arc::new(pricing::TariffEngine::default());
 
-    // Billing ledger (Arc<Mutex<>> — thread-safe)
+    // Billing ledger (Arc<Mutex<>> — thread-safe, broker + api_registry에서 공유)
     let billing = Arc::new(parking_lot::Mutex::new(crate::billing::BillingLedger::new()));
 
     // States
@@ -335,7 +358,7 @@ async fn main() -> std::io::Result<()> {
                     .map(|v| v == "true").unwrap_or(false),
             },
             Arc::new(filter::SocraticMlaEngine::new(10_000)),
-            g_engine.clone(), tariff.clone(), billing,
+            g_engine.clone(), tariff.clone(), billing.clone(),
         )),
         tariff, g_engine,
         payment_processor: Arc::new(X402PaymentProcessor::new(10_000)),
@@ -375,6 +398,7 @@ async fn main() -> std::io::Result<()> {
         db:          db.clone(),
         http:        http_client,
         did_service: shared_did_service.clone(),
+        billing:     billing.clone(),
     });
 
     info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

@@ -82,12 +82,16 @@ pub async fn create_post(
         return HttpResponse::BadRequest().json(json!({"error": "budget must be > 0"}));
     }
 
-    // [Step 3] 에스크로에 예산 잠금
+    // [Step 3] 에스크로에 예산 잠금 (실패 시 게시 차단 — 에스크로 없는 게시 금지)
     let escrow_id = match state.escrow_link.lock_budget(&req.agent_did, req.budget_bnkr).await {
-        Ok(id) => Some(id),
+        Ok(id) => id,
         Err(e) => {
             tracing::warn!("[marketplace] escrow lock failed: {}", e);
-            None  // 에스크로 실패해도 게시는 허용 (testnet 단계)
+            return HttpResponse::ServiceUnavailable().json(json!({
+                "error": "escrow_lock_failed",
+                "message": e,
+                "hint": "Set QKVG_ESCROW_ADDRESS=0x0000000000000000000000000000000000000000 for dev mode"
+            }));
         }
     };
 
@@ -124,7 +128,7 @@ pub async fn create_post(
     .bind(&capabilities)
     .bind(req.job_detail.as_ref().map(|j| serde_json::to_value(j).ok()).flatten())
     .bind(req.subcontract_detail.as_ref().map(|s| serde_json::to_value(s).ok()).flatten())
-    .bind(escrow_id.clone())
+    .bind(Some(escrow_id.clone()))
     .bind(status.elite_score as i32)
     .bind(now)
     .execute(&state.db)
