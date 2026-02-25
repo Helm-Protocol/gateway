@@ -13,6 +13,7 @@
 
 pub mod elite_gate;
 pub mod escrow_link;
+pub mod funding;
 pub mod types;
 
 use actix_web::{delete, get, post, web, HttpResponse, Responder};
@@ -91,7 +92,7 @@ pub async fn create_post(
     };
     let capabilities = req.required_capabilities.clone().unwrap_or_default();
 
-    let result = sqlx::query!(
+    let result = sqlx::query(
         r#"
         INSERT INTO marketplace_posts
             (id, author_did, post_type, title, description,
@@ -104,20 +105,20 @@ pub async fn create_post(
              $9, $10,
              'open', $11, $12, $13, $13)
         "#,
-        post_id,
-        req.agent_did,
-        post_type_str,
-        req.title.trim(),
-        req.description.trim(),
-        req.budget_bnkr as i64,
-        req.deadline_hours.map(|h| h as i32),
-        &capabilities,
-        req.job_detail.as_ref().map(|j| serde_json::to_value(j).ok()).flatten(),
-        req.subcontract_detail.as_ref().map(|s| serde_json::to_value(s).ok()).flatten(),
-        escrow_id,
-        status.elite_score as i32,
-        now,
     )
+    .bind(post_id)
+    .bind(req.agent_did.clone())
+    .bind(post_type_str)
+    .bind(req.title.trim())
+    .bind(req.description.trim())
+    .bind(req.budget_bnkr as i64)
+    .bind(req.deadline_hours.map(|h| h as i32))
+    .bind(&capabilities)
+    .bind(req.job_detail.as_ref().map(|j| serde_json::to_value(j).ok()).flatten())
+    .bind(req.subcontract_detail.as_ref().map(|s| serde_json::to_value(s).ok()).flatten())
+    .bind(escrow_id.clone())
+    .bind(status.elite_score as i32)
+    .bind(now)
     .execute(&state.db)
     .await;
 
@@ -158,7 +159,7 @@ pub async fn list_posts(
         PostType::ApiSubcontract => "api_subcontract",
     });
 
-    let rows = sqlx::query!(
+    let rows = sqlx::query(
         r#"
         SELECT
             id, author_did, post_type, title, description,
@@ -174,34 +175,38 @@ pub async fn list_posts(
         ORDER BY elite_score_at_post DESC, created_at DESC
         LIMIT $4 OFFSET $5
         "#,
-        status_filter,
-        type_filter,
-        query.capability.as_deref(),
-        limit,
-        offset,
     )
+    .bind(status_filter)
+    .bind(type_filter)
+    .bind(query.capability.as_deref())
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&state.db)
     .await;
 
     match rows {
         Ok(posts) => {
-            let items: Vec<serde_json::Value> = posts.iter().map(|p| json!({
-                "id": p.id,
-                "author_did": p.author_did,
-                "post_type": p.post_type,
-                "title": p.title,
-                "description": &p.description[..p.description.len().min(200)],
-                "budget_bnkr": p.budget_bnkr,
-                "deadline_hours": p.deadline_hours,
-                "required_capabilities": p.required_capabilities,
-                "status": p.status,
-                "escrow_locked": p.escrow_id.is_some(),
-                "winner_did": p.winner_did,
-                "elite_score_at_post": p.elite_score_at_post,
-                "application_count": p.application_count,
-                "comment_count": p.comment_count,
-                "created_at": p.created_at,
-            })).collect();
+            let items: Vec<serde_json::Value> = posts.iter().map(|p| {
+                use sqlx::Row;
+                let description = p.get::<String, _>("description");
+                json!({
+                    "id": p.get::<uuid::Uuid, _>("id"),
+                    "author_did": p.get::<String, _>("author_did"),
+                    "post_type": p.get::<String, _>("post_type"),
+                    "title": p.get::<String, _>("title"),
+                    "description": &description[..description.len().min(200)],
+                    "budget_bnkr": p.get::<i64, _>("budget_bnkr"),
+                    "deadline_hours": p.get::<Option<i32>, _>("deadline_hours"),
+                    "required_capabilities": p.get::<Vec<String>, _>("required_capabilities"),
+                    "status": p.get::<String, _>("status"),
+                    "escrow_locked": p.get::<Option<uuid::Uuid>, _>("escrow_id").is_some(),
+                    "winner_did": p.get::<Option<String>, _>("winner_did"),
+                    "elite_score_at_post": p.get::<i32, _>("elite_score_at_post"),
+                    "application_count": p.get::<i32, _>("application_count"),
+                    "comment_count": p.get::<i32, _>("comment_count"),
+                    "created_at": p.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                })
+            }).collect();
 
             HttpResponse::Ok().json(json!({
                 "posts": items,
@@ -225,34 +230,37 @@ pub async fn get_post(
 ) -> impl Responder {
     let post_id = path.into_inner();
 
-    let post = sqlx::query!(
+    let post = sqlx::query(
         "SELECT * FROM marketplace_posts WHERE id = $1",
-        post_id
     )
+    .bind(post_id)
     .fetch_optional(&state.db)
     .await;
 
     match post {
-        Ok(Some(p)) => HttpResponse::Ok().json(json!({
-            "id": p.id,
-            "author_did": p.author_did,
-            "post_type": p.post_type,
-            "title": p.title,
-            "description": p.description,
-            "budget_bnkr": p.budget_bnkr,
-            "deadline_hours": p.deadline_hours,
-            "required_capabilities": p.required_capabilities,
-            "job_detail": p.job_detail_json,
-            "subcontract_detail": p.subcontract_detail_json,
-            "status": p.status,
-            "escrow_locked": p.escrow_id.is_some(),
-            "winner_did": p.winner_did,
-            "elite_score_at_post": p.elite_score_at_post,
-            "application_count": p.application_count,
-            "comment_count": p.comment_count,
-            "created_at": p.created_at,
-            "updated_at": p.updated_at,
-        })),
+        Ok(Some(p)) => {
+            use sqlx::Row;
+            HttpResponse::Ok().json(json!({
+                "id": p.get::<uuid::Uuid, _>("id"),
+                "author_did": p.get::<String, _>("author_did"),
+                "post_type": p.get::<String, _>("post_type"),
+                "title": p.get::<String, _>("title"),
+                "description": p.get::<String, _>("description"),
+                "budget_bnkr": p.get::<i64, _>("budget_bnkr"),
+                "deadline_hours": p.get::<Option<i32>, _>("deadline_hours"),
+                "required_capabilities": p.get::<Vec<String>, _>("required_capabilities"),
+                "job_detail": p.get::<Option<serde_json::Value>, _>("job_detail_json"),
+                "subcontract_detail": p.get::<Option<serde_json::Value>, _>("subcontract_detail_json"),
+                "status": p.get::<String, _>("status"),
+                "escrow_locked": p.get::<Option<uuid::Uuid>, _>("escrow_id").is_some(),
+                "winner_did": p.get::<Option<String>, _>("winner_did"),
+                "elite_score_at_post": p.get::<i32, _>("elite_score_at_post"),
+                "application_count": p.get::<i32, _>("application_count"),
+                "comment_count": p.get::<i32, _>("comment_count"),
+                "created_at": p.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                "updated_at": p.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+            }))
+        },
         Ok(None) => HttpResponse::NotFound().json(json!({"error": "post not found"})),
         Err(e)   => HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
     }
@@ -279,19 +287,20 @@ pub async fn apply(
     }
 
     // 게시글 상태 확인
-    let post = sqlx::query!(
+    let post = sqlx::query(
         "SELECT status, author_did FROM marketplace_posts WHERE id = $1",
-        req.post_id
     )
+    .bind(req.post_id)
     .fetch_optional(&state.db)
     .await;
 
     match post {
         Ok(Some(p)) => {
-            if p.status != "open" {
+            use sqlx::Row;
+            if p.get::<String, _>("status") != "open" {
                 return HttpResponse::BadRequest().json(json!({"error": "post is not open"}));
             }
-            if p.author_did == req.agent_did {
+            if p.get::<String, _>("author_did") == req.agent_did {
                 return HttpResponse::BadRequest().json(json!({"error": "cannot apply to own post"}));
             }
         },
@@ -300,13 +309,13 @@ pub async fn apply(
     }
 
     // 중복 지원 체크
-    let already: i64 = sqlx::query_scalar!(
+    let already: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM marketplace_applications WHERE post_id=$1 AND applicant_did=$2",
-        req.post_id, req.agent_did
     )
+    .bind(req.post_id)
+    .bind(req.agent_did.clone())
     .fetch_one(&state.db)
     .await
-    .unwrap_or(Some(0))
     .unwrap_or(0);
 
     if already > 0 {
@@ -315,28 +324,29 @@ pub async fn apply(
 
     // 지원 저장
     let app_id = Uuid::new_v4();
-    let result = sqlx::query!(
+    let result = sqlx::query(
         r#"
         INSERT INTO marketplace_applications
             (id, post_id, applicant_did, proposal, counter_price_bnkr, portfolio_ref, status, created_at)
         VALUES ($1, $2, $3, $4, $5, $6, 'pending', NOW())
         "#,
-        app_id,
-        req.post_id,
-        req.agent_did,
-        req.proposal,
-        req.counter_price_bnkr.map(|p| p as i64),
-        req.portfolio_ref,
     )
+    .bind(app_id)
+    .bind(req.post_id)
+    .bind(req.agent_did.clone())
+    .bind(req.proposal.clone())
+    .bind(req.counter_price_bnkr.map(|p| p as i64))
+    .bind(req.portfolio_ref.clone())
     .execute(&state.db)
     .await;
 
     if result.is_ok() {
         // application_count 증가
-        let _ = sqlx::query!(
+        let _ = sqlx::query(
             "UPDATE marketplace_posts SET application_count = application_count+1, updated_at=NOW() WHERE id=$1",
-            req.post_id
-        ).execute(&state.db).await;
+        )
+        .bind(req.post_id)
+        .execute(&state.db).await;
     }
 
     match result {
@@ -374,26 +384,27 @@ pub async fn add_comment(
         .unwrap_or(false);
 
     let comment_id = Uuid::new_v4();
-    let result = sqlx::query!(
+    let result = sqlx::query(
         r#"
         INSERT INTO marketplace_comments
             (id, post_id, author_did, content, is_elite, created_at)
         VALUES ($1, $2, $3, $4, $5, NOW())
         "#,
-        comment_id,
-        req.post_id,
-        req.agent_did,
-        req.content.trim(),
-        is_elite,
     )
+    .bind(comment_id)
+    .bind(req.post_id)
+    .bind(req.agent_did.clone())
+    .bind(req.content.trim())
+    .bind(is_elite)
     .execute(&state.db)
     .await;
 
     if result.is_ok() {
-        let _ = sqlx::query!(
+        let _ = sqlx::query(
             "UPDATE marketplace_posts SET comment_count=comment_count+1, updated_at=NOW() WHERE id=$1",
-            req.post_id
-        ).execute(&state.db).await;
+        )
+        .bind(req.post_id)
+        .execute(&state.db).await;
     }
 
     match result {
@@ -415,19 +426,20 @@ pub async fn select_winner(
     req: web::Json<SelectWinnerRequest>,
 ) -> impl Responder {
     // 게시자 본인 확인
-    let post = sqlx::query!(
+    let post = sqlx::query(
         "SELECT author_did, status FROM marketplace_posts WHERE id=$1",
-        req.post_id
     )
+    .bind(req.post_id)
     .fetch_optional(&state.db)
     .await;
 
     match post {
         Ok(Some(p)) => {
-            if p.author_did != req.author_did {
+            use sqlx::Row;
+            if p.get::<String, _>("author_did") != req.author_did {
                 return HttpResponse::Forbidden().json(json!({"error": "only post author can select winner"}));
             }
-            if p.status != "open" {
+            if p.get::<String, _>("status") != "open" {
                 return HttpResponse::BadRequest().json(json!({"error": "post is not open"}));
             }
         },
@@ -436,36 +448,42 @@ pub async fn select_winner(
     }
 
     // 지원서 확인
-    let app = sqlx::query!(
+    let app = sqlx::query(
         "SELECT applicant_did FROM marketplace_applications WHERE id=$1 AND post_id=$2",
-        req.application_id, req.post_id
     )
+    .bind(req.application_id)
+    .bind(req.post_id)
     .fetch_optional(&state.db)
     .await;
 
     let winner_did = match app {
-        Ok(Some(a)) => a.applicant_did,
+        Ok(Some(a)) => { use sqlx::Row; a.get::<String, _>("applicant_did") },
         Ok(None)    => return HttpResponse::NotFound().json(json!({"error": "application not found"})),
         Err(e)      => return HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
     };
 
     // 게시글 상태 업데이트
-    let _ = sqlx::query!(
+    let _ = sqlx::query(
         "UPDATE marketplace_posts SET status='in_progress', winner_did=$1, updated_at=NOW() WHERE id=$2",
-        winner_did, req.post_id
-    ).execute(&state.db).await;
+    )
+    .bind(winner_did.clone())
+    .bind(req.post_id)
+    .execute(&state.db).await;
 
     // 낙찰 지원서 상태 업데이트
-    let _ = sqlx::query!(
+    let _ = sqlx::query(
         "UPDATE marketplace_applications SET status='accepted' WHERE id=$1",
-        req.application_id
-    ).execute(&state.db).await;
+    )
+    .bind(req.application_id)
+    .execute(&state.db).await;
 
     // 다른 지원서 거절
-    let _ = sqlx::query!(
+    let _ = sqlx::query(
         "UPDATE marketplace_applications SET status='rejected' WHERE post_id=$1 AND id!=$2",
-        req.post_id, req.application_id
-    ).execute(&state.db).await;
+    )
+    .bind(req.post_id)
+    .bind(req.application_id)
+    .execute(&state.db).await;
 
     HttpResponse::Ok().json(json!({
         "winner_did": winner_did,
@@ -484,25 +502,26 @@ pub async fn confirm_delivery(
     req: web::Json<ConfirmDeliveryRequest>,
 ) -> impl Responder {
     // 게시글 + 에스크로 ID 조회
-    let post = sqlx::query!(
+    let post = sqlx::query(
         "SELECT author_did, status, winner_did, escrow_id, budget_bnkr FROM marketplace_posts WHERE id=$1",
-        req.post_id
     )
+    .bind(req.post_id)
     .fetch_optional(&state.db)
     .await;
 
     let (winner_did, escrow_id, budget) = match post {
         Ok(Some(p)) => {
-            if p.author_did != req.author_did {
+            use sqlx::Row;
+            if p.get::<String, _>("author_did") != req.author_did {
                 return HttpResponse::Forbidden().json(json!({"error": "only post author can confirm delivery"}));
             }
-            if p.status != "in_progress" {
+            if p.get::<String, _>("status") != "in_progress" {
                 return HttpResponse::BadRequest().json(json!({"error": "post is not in_progress"}));
             }
             (
-                p.winner_did.unwrap_or_default(),
-                p.escrow_id,
-                p.budget_bnkr as u64,
+                p.get::<Option<String>, _>("winner_did").unwrap_or_default(),
+                p.get::<Option<uuid::Uuid>, _>("escrow_id"),
+                p.get::<i64, _>("budget_bnkr") as u64,
             )
         },
         Ok(None) => return HttpResponse::NotFound().json(json!({"error": "post not found"})),
@@ -511,16 +530,17 @@ pub async fn confirm_delivery(
 
     // 에스크로 정산 (QkvgEscrow.settleAgentEscrow)
     let settlement = if let Some(ref eid) = escrow_id {
-        state.escrow_link.settle(eid, &winner_did, budget).await
+        state.escrow_link.settle(&eid.to_string(), &winner_did, budget).await
     } else {
         Ok(json!({"settled": false, "note": "no escrow — manual transfer required"}))
     };
 
     // 게시글 완료 처리
-    let _ = sqlx::query!(
+    let _ = sqlx::query(
         "UPDATE marketplace_posts SET status='completed', updated_at=NOW() WHERE id=$1",
-        req.post_id
-    ).execute(&state.db).await;
+    )
+    .bind(req.post_id)
+    .execute(&state.db).await;
 
     match settlement {
         Ok(tx_info) => HttpResponse::Ok().json(json!({
@@ -585,7 +605,7 @@ pub async fn elite_status(
 
 #[get("/marketplace/stats")]
 pub async fn marketplace_stats(state: web::Data<MarketplaceState>) -> impl Responder {
-    let stats = sqlx::query!(
+    let stats = sqlx::query(
         r#"
         SELECT
             COUNT(*) FILTER (WHERE true) AS total_posts,
@@ -593,39 +613,40 @@ pub async fn marketplace_stats(state: web::Data<MarketplaceState>) -> impl Respo
             COALESCE(SUM(budget_bnkr) FILTER (WHERE escrow_id IS NOT NULL AND status IN ('open','in_progress')), 0) AS bnkr_in_escrow,
             COALESCE(SUM(budget_bnkr) FILTER (WHERE status='completed'), 0) AS bnkr_settled
         FROM marketplace_posts
-        "#
+        "#,
     )
     .fetch_one(&state.db)
     .await;
 
-    let elite_count: i64 = sqlx::query_scalar!(
+    let elite_count: i64 = sqlx::query_scalar(
         r#"
         SELECT COUNT(*) FROM local_visas
         WHERE total_calls >= 1
           AND referrer_did IS NOT NULL
           AND created_at <= NOW() - INTERVAL '7 days'
-        "#
+        "#,
     )
     .fetch_one(&state.db)
     .await
-    .unwrap_or(Some(0))
     .unwrap_or(0);
 
-    let app_count: i64 = sqlx::query_scalar!("SELECT COUNT(*) FROM marketplace_applications")
+    let app_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM marketplace_applications")
         .fetch_one(&state.db)
         .await
-        .unwrap_or(Some(0))
         .unwrap_or(0);
 
     match stats {
-        Ok(s) => HttpResponse::Ok().json(json!({
-            "total_posts": s.total_posts.unwrap_or(0),
-            "open_posts": s.open_posts.unwrap_or(0),
-            "bnkr_in_escrow": s.bnkr_in_escrow.unwrap_or(0),
-            "bnkr_settled": s.bnkr_settled.unwrap_or(0),
-            "elite_agent_count": elite_count,
-            "total_applications": app_count,
-        })),
+        Ok(s) => {
+            use sqlx::Row;
+            HttpResponse::Ok().json(json!({
+                "total_posts": s.get::<Option<i64>, _>("total_posts").unwrap_or(0),
+                "open_posts": s.get::<Option<i64>, _>("open_posts").unwrap_or(0),
+                "bnkr_in_escrow": s.get::<Option<i64>, _>("bnkr_in_escrow").unwrap_or(0),
+                "bnkr_settled": s.get::<Option<i64>, _>("bnkr_settled").unwrap_or(0),
+                "elite_agent_count": elite_count,
+                "total_applications": app_count,
+            }))
+        },
         Err(e) => HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
     }
 }

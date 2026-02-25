@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tracing::info;
 
 mod auth;
+mod billing;
 mod synco;
 mod broker;
 mod filter;
@@ -24,7 +25,7 @@ mod api_registry;
 use filter::g_metric::{GMetricEngine, SfeAnalogMetrics};
 use broker::{GrandCrossApiBroker, ProviderConfig};
 use payments::x402::X402PaymentProcessor;
-use payments::multi_token::MultiTokenProcessor;
+use payments::MultiTokenProcessor;
 use pricing::TariffEngine;
 use marketplace::MarketplaceState;
 use marketplace::elite_gate::EliteGate;
@@ -318,18 +319,23 @@ async fn main() -> std::io::Result<()> {
     let g_engine = Arc::new(filter::GMetricEngine::default());
     let tariff   = Arc::new(pricing::TariffEngine::default());
 
+    // Billing ledger (Arc<Mutex<>> — thread-safe)
+    let billing = Arc::new(parking_lot::Mutex::new(crate::billing::BillingLedger::new()));
+
     // States
     let main_state = web::Data::new(AppState {
         broker: Arc::new(GrandCrossApiBroker::new(
             ProviderConfig {
-                anthropic_key:     std::env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
-                openai_key:        std::env::var("OPENAI_API_KEY").unwrap_or_default(),
-                brave_key:         std::env::var("BRAVE_API_KEY").unwrap_or_default(),
-                base_rpc_url:      std::env::var("BASE_RPC_URL").unwrap_or("https://mainnet.base.org".into()),
-                coingecko_api_key: std::env::var("COINGECKO_API_KEY").unwrap_or_default(),
+                anthropic_key:      std::env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
+                openai_key:         std::env::var("OPENAI_API_KEY").unwrap_or_default(),
+                brave_key:          std::env::var("BRAVE_API_KEY").unwrap_or_default(),
+                base_rpc_url:       std::env::var("BASE_RPC_URL").unwrap_or("https://mainnet.base.org".into()),
+                coingecko_api_key:  std::env::var("COINGECKO_API_KEY").unwrap_or_default(),
+                use_semantic_embed: std::env::var("USE_SEMANTIC_EMBED")
+                    .map(|v| v == "true").unwrap_or(false),
             },
             Arc::new(filter::SocraticMlaEngine::new(10_000)),
-            g_engine.clone(), tariff.clone(),
+            g_engine.clone(), tariff.clone(), billing,
         )),
         tariff, g_engine,
         payment_processor: Arc::new(X402PaymentProcessor::new(10_000)),
@@ -344,12 +350,19 @@ async fn main() -> std::io::Result<()> {
         db: db.clone(),
         elite_gate:  Arc::new(EliteGate::new(db.clone())),
         escrow_link: Arc::new(EscrowLink::new(
-            std::env::var("BASE_RPC_URL").unwrap_or("https://mainnet.base.org".into()),
             std::env::var("QKVG_ESCROW_ADDRESS").unwrap_or_default(),
+            std::env::var("BASE_RPC_URL").unwrap_or("https://mainnet.base.org".into()),
+            std::env::var("GATEWAY_WALLET").unwrap_or_default(),
         )),
     });
 
-    let funding_state      = web::Data::new(FundingState      { db: db.clone() });
+    let funding_state = web::Data::new(FundingState {
+        db:         db.clone(),
+        elite_gate: Arc::new(EliteGate::new(db.clone())),
+        http:       reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(30))
+                        .build().unwrap(),
+    });
     let api_registry_state = web::Data::new(ApiRegistryState  { db: db.clone(), http: http_client });
 
     info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

@@ -167,7 +167,7 @@ pub async fn create_funding(
     let cat_str  = serde_json::to_value(&req.category)
         .unwrap_or(json!("custom")).as_str().unwrap_or("custom").to_string();
 
-    let r = sqlx::query!(
+    let r = sqlx::query(
         r#"
         INSERT INTO funding_posts
           (id, author_did, title, description, category,
@@ -177,10 +177,20 @@ pub async fn create_funding(
         VALUES
           ($1,$2,$3,$4,$5, $6,$7,0,0, 'active',$8,$9, $10,$11,$12,NOW())
         "#,
-        post_id, req.author_did, req.title, req.description, cat_str,
-        req.goal_amount, req.token, deadline, req.execution_plan,
-        req.human_role, req.hire_fee, req.hire_fee_token,
-    ).execute(&state.db).await;
+    )
+    .bind(post_id)
+    .bind(req.author_did.clone())
+    .bind(req.title.clone())
+    .bind(req.description.clone())
+    .bind(cat_str)
+    .bind(req.goal_amount)
+    .bind(req.token.clone())
+    .bind(deadline)
+    .bind(req.execution_plan.clone())
+    .bind(req.human_role.clone())
+    .bind(req.hire_fee)
+    .bind(req.hire_fee_token.clone())
+    .execute(&state.db).await;
 
     match r {
         Ok(_) => HttpResponse::Created().json(json!({
@@ -209,7 +219,7 @@ pub async fn list_funding(
     let limit = 20i64;
     let offset = (page - 1) * limit;
 
-    let rows = sqlx::query!(
+    let rows = sqlx::query(
         r#"
         SELECT
           id, author_did, title, category,
@@ -224,25 +234,36 @@ pub async fn list_funding(
         ORDER BY created_at DESC
         LIMIT $2 OFFSET $3
         "#,
-        category, limit, offset
-    ).fetch_all(&state.db).await;
+    )
+    .bind(category)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db).await;
 
     match rows {
         Ok(items) => HttpResponse::Ok().json(json!({
-            "funding_posts": items.iter().map(|i| json!({
-                "id": i.id,
-                "author_did": i.author_did,
-                "title": i.title,
-                "category": i.category,
-                "goal":   format!("{} {}", i.goal_amount, i.token),
-                "raised": format!("{} {}", i.raised_amount, i.token),
-                "progress_pct": i.progress_pct,
-                "contributors": i.contributor_count,
-                "status": i.status,
-                "deadline": i.deadline,
-                "human_role": i.human_role,
-                "hire_fee": i.hire_fee.map(|f| format!("{} {}", f, i.hire_fee_token.as_deref().unwrap_or("USDC"))),
-            })).collect::<Vec<_>>()
+            "funding_posts": items.iter().map(|i| {
+                use sqlx::Row;
+                let goal_amount = i.get::<f64, _>("goal_amount");
+                let token = i.get::<String, _>("token");
+                let raised_amount = i.get::<f64, _>("raised_amount");
+                let hire_fee = i.get::<Option<f64>, _>("hire_fee");
+                let hire_fee_token = i.get::<Option<String>, _>("hire_fee_token");
+                json!({
+                    "id": i.get::<uuid::Uuid, _>("id"),
+                    "author_did": i.get::<String, _>("author_did"),
+                    "title": i.get::<String, _>("title"),
+                    "category": i.get::<String, _>("category"),
+                    "goal":   format!("{} {}", goal_amount, token),
+                    "raised": format!("{} {}", raised_amount, token),
+                    "progress_pct": i.get::<Option<f64>, _>("progress_pct"),
+                    "contributors": i.get::<i32, _>("contributor_count"),
+                    "status": i.get::<String, _>("status"),
+                    "deadline": i.get::<chrono::DateTime<chrono::Utc>, _>("deadline"),
+                    "human_role": i.get::<Option<String>, _>("human_role"),
+                    "hire_fee": hire_fee.map(|f| format!("{} {}", f, hire_fee_token.as_deref().unwrap_or("USDC"))),
+                })
+            }).collect::<Vec<_>>()
         })),
         Err(e) => HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
     }
@@ -259,21 +280,28 @@ pub async fn contribute(
     }
 
     // 펀딩 게시글 확인
-    let post = sqlx::query!(
+    let post_row = sqlx::query(
         "SELECT goal_amount, token, raised_amount, status, author_did, deadline FROM funding_posts WHERE id=$1",
-        req.post_id
-    ).fetch_optional(&state.db).await;
+    )
+    .bind(req.post_id)
+    .fetch_optional(&state.db).await;
 
-    let post = match post {
+    let post_row = match post_row {
         Ok(Some(p)) => p,
         Ok(None)    => return HttpResponse::NotFound().json(json!({"error": "funding post not found"})),
         Err(e)      => return HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
     };
 
-    if post.status != "active" {
-        return HttpResponse::BadRequest().json(json!({"error": format!("Funding is {}", post.status)}));
+    use sqlx::Row as _;
+    let post_status = post_row.get::<String, _>("status");
+    let post_deadline = post_row.get::<chrono::DateTime<chrono::Utc>, _>("deadline");
+    let post_goal_amount = post_row.get::<f64, _>("goal_amount");
+    let post_token = post_row.get::<String, _>("token");
+
+    if post_status != "active" {
+        return HttpResponse::BadRequest().json(json!({"error": format!("Funding is {}", post_status)}));
     }
-    if post.deadline < Utc::now() {
+    if post_deadline < Utc::now() {
         return HttpResponse::BadRequest().json(json!({"error": "Funding deadline has passed"}));
     }
 
@@ -281,17 +309,22 @@ pub async fn contribute(
     // 실제: multi_token::balance_column(&token) 사용
     // 여기선 BNKR 기준으로 처리 (확장 가능)
     let contrib_id = Uuid::new_v4();
-    let _ = sqlx::query!(
+    let _ = sqlx::query(
         r#"
         INSERT INTO funding_contributions
           (id, post_id, contributor_did, amount, token, refunded, contributed_at)
         VALUES ($1,$2,$3,$4,$5,false,NOW())
         "#,
-        contrib_id, req.post_id, req.contributor_did, req.amount, req.token,
-    ).execute(&state.db).await;
+    )
+    .bind(contrib_id)
+    .bind(req.post_id)
+    .bind(req.contributor_did.clone())
+    .bind(req.amount)
+    .bind(req.token.clone())
+    .execute(&state.db).await;
 
     // 펀딩 합계 업데이트
-    let new_raised = sqlx::query_scalar!(
+    let new_raised: f64 = sqlx::query_scalar(
         r#"
         UPDATE funding_posts
         SET raised_amount = raised_amount + $1,
@@ -300,17 +333,19 @@ pub async fn contribute(
         WHERE id = $2
         RETURNING raised_amount
         "#,
-        req.amount, req.post_id,
-    ).fetch_one(&state.db).await.unwrap_or(0.0);
+    )
+    .bind(req.amount)
+    .bind(req.post_id)
+    .fetch_one(&state.db).await.unwrap_or(0.0);
 
-    let progress = (new_raised / post.goal_amount * 100.0).min(100.0);
-    let reached  = new_raised >= post.goal_amount;
+    let progress = (new_raised / post_goal_amount * 100.0).min(100.0);
+    let reached  = new_raised >= post_goal_amount;
 
     HttpResponse::Created().json(json!({
         "contribution_id": contrib_id,
         "post_id": req.post_id,
         "amount": format!("{} {}", req.amount, req.token),
-        "total_raised": format!("{} {}", new_raised, post.token),
+        "total_raised": format!("{} {}", new_raised, post_token),
         "progress_pct": progress,
         "goal_reached": reached,
         "message": if reached {

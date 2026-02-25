@@ -180,17 +180,18 @@ impl GrandCrossApiBroker {
         let gap = if no_cache {
             GapAssessment {
                 is_gap: true,
+                cached_response: None,
                 g_score: 1.0,
-                novelty_proof: "no-cache-category".into(),
-                reason: format!("{} is never cached", req.category.endpoint_name()),
+                classification: "no-cache-category".into(),
+                cost_saved_bnkr: 0.0,
             }
         } else {
-            self.semantic_cache.assess_gap(&q_embedding, &query_str)
+            self.semantic_cache.assess_gap(&query_str, &q_embedding, 0.01)
         };
 
         // Cache hit path
         if !gap.is_gap {
-            if let Some(cached) = self.semantic_cache.retrieve(&q_embedding) {
+            if let Some(cached) = gap.cached_response.clone() {
                 info!("[broker] cache hit g={:.3} endpoint={}", gap.g_score, req.category.endpoint_name());
 
                 // [v2] Billing: charge base toll on cache hit
@@ -226,7 +227,7 @@ impl GrandCrossApiBroker {
         };
 
         // Store in semantic cache (DeFi/Encode/Recover excluded above)
-        self.semantic_cache.store(q_embedding, data.to_string());
+        self.semantic_cache.store_latent(&query_str, &data.to_string(), q_embedding);
 
         // [v2] Billing: charge full fee with novelty premium
         let units = if gap.g_score > 0.5 { 2 } else { 1 }; // premium units for high novelty

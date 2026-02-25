@@ -28,7 +28,7 @@ impl EliteGate {
     pub async fn check(&self, agent_did: &str) -> Result<EliteStatus, sqlx::Error> {
 
         // ── 1. DID 나이 & 기본 정보 ─────────────────────────────────
-        let row = sqlx::query!(
+        let row = sqlx::query(
             r#"
             SELECT
                 created_at,
@@ -37,8 +37,8 @@ impl EliteGate {
             FROM local_visas
             WHERE local_did = $1
             "#,
-            agent_did
         )
+        .bind(agent_did)
         .fetch_optional(&self.db)
         .await?;
 
@@ -57,31 +57,31 @@ impl EliteGate {
             });
         };
 
+        use sqlx::Row as _;
         // 나이 계산
         let age_days = Utc::now()
-            .signed_duration_since(visa.created_at)
+            .signed_duration_since(visa.get::<chrono::DateTime<chrono::Utc>, _>("created_at"))
             .num_days()
             .max(0) as u64;
         let age_ok = age_days >= MIN_DID_AGE_DAYS;
 
         // ── 2. API 중개 활성 여부 ────────────────────────────────────
         // local_visas.total_calls 는 api_broker.rs 가 BillingLedger 통해 증가시킴
-        let api_calls = visa.total_calls.max(0) as u64;
+        let api_calls = visa.get::<i64, _>("total_calls").max(0) as u64;
         let api_ok = api_calls >= MIN_API_CALLS;
 
         // ── 3. 레퍼럴 활성화 여부 ───────────────────────────────────
         // referrer_did 컬럼이 있으면 레퍼럴 등록된 것
-        let referral_active = visa.referrer_did.is_some();
+        let referral_active = visa.get::<Option<String>, _>("referrer_did").is_some();
         let referral_ok = referral_active;
 
         // ── 레퍼럴 인원 수 (점수 계산용) ────────────────────────────
-        let referral_count: i64 = sqlx::query_scalar!(
+        let referral_count: i64 = sqlx::query_scalar(
             r#"SELECT COUNT(*) FROM local_visas WHERE referrer_did = $1"#,
-            agent_did
         )
+        .bind(agent_did)
         .fetch_one(&self.db)
-        .await?
-        .unwrap_or(0);
+        .await?;
 
         // ── 최종 판정 ───────────────────────────────────────────────
         let can_post = age_ok && api_ok && referral_ok;
@@ -117,13 +117,12 @@ impl EliteGate {
 
     /// DID 존재 여부만 빠르게 확인 (댓글/지원 권한용)
     pub async fn did_exists(&self, agent_did: &str) -> Result<bool, sqlx::Error> {
-        let count: i64 = sqlx::query_scalar!(
+        let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM local_visas WHERE local_did = $1",
-            agent_did
         )
+        .bind(agent_did)
         .fetch_one(&self.db)
-        .await?
-        .unwrap_or(0);
+        .await?;
         Ok(count > 0)
     }
 }

@@ -26,7 +26,7 @@ use actix_web::{delete, get, post, web, HttpResponse, Responder};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 // ============================
@@ -132,12 +132,12 @@ pub async fn register_api(
     req: web::Json<RegisterApiRequest>,
 ) -> impl Responder {
     // DID 존재 확인
-    let exists: i64 = sqlx::query_scalar!(
+    let exists: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM local_visas WHERE local_did = $1",
-        req.agent_did
     )
+    .bind(req.agent_did.clone())
     .fetch_one(&state.db).await
-    .unwrap_or(Some(0)).unwrap_or(0);
+    .unwrap_or(0);
 
     if exists == 0 {
         return HttpResponse::Unauthorized().json(json!({
@@ -165,7 +165,7 @@ pub async fn register_api(
         .unwrap_or("custom")
         .to_string();
 
-    let result = sqlx::query!(
+    let result = sqlx::query(
         r#"
         INSERT INTO api_listings
             (id, owner_did, name, description, category,
@@ -178,16 +178,16 @@ pub async fn register_api(
              $8, $9,
              true, 0, 0, NOW())
         "#,
-        listing_id,
-        req.agent_did,
-        req.name,
-        req.description,
-        category_str,
-        req.endpoint_url,
-        req.price_per_call_bnkr as i64,
-        req.sla_latency_ms.map(|v| v as i32),
-        req.sla_uptime_pct,
     )
+    .bind(listing_id)
+    .bind(req.agent_did.clone())
+    .bind(req.name.clone())
+    .bind(req.description.clone())
+    .bind(category_str)
+    .bind(req.endpoint_url.clone())
+    .bind(req.price_per_call_bnkr as i64)
+    .bind(req.sla_latency_ms.map(|v| v as i32))
+    .bind(req.sla_uptime_pct)
     .execute(&state.db).await;
 
     match result {
@@ -217,7 +217,7 @@ pub async fn list_apis(
     let limit  = query.limit.unwrap_or(20).min(50) as i64;
     let offset = ((query.page.unwrap_or(1).max(1) - 1) as i64) * limit;
 
-    let rows = sqlx::query!(
+    let rows = sqlx::query(
         r#"
         SELECT
             id, owner_did, name, description, category,
@@ -230,27 +230,27 @@ pub async fn list_apis(
         ORDER BY call_count DESC, created_at DESC
         LIMIT $3 OFFSET $4
         "#,
-        query.category.as_deref(),
-        query.owner_did.as_deref(),
-        limit,
-        offset,
     )
+    .bind(query.category.as_deref())
+    .bind(query.owner_did.as_deref())
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&state.db).await;
 
     match rows {
         Ok(listings) => {
             let items: Vec<serde_json::Value> = listings.iter().map(|l| json!({
-                "id": l.id,
-                "owner_did": l.owner_did,
-                "name": l.name,
-                "description": l.description,
-                "category": l.category,
-                "price_per_call_bnkr": l.price_per_call_bnkr,
-                "sla_latency_ms": l.sla_latency_ms,
-                "sla_uptime_pct": l.sla_uptime_pct,
-                "call_count": l.call_count,
-                "subscriber_count": l.subscriber_count,
-                "created_at": l.created_at,
+                "id": l.get::<uuid::Uuid, _>("id"),
+                "owner_did": l.get::<String, _>("owner_did"),
+                "name": l.get::<String, _>("name"),
+                "description": l.get::<Option<String>, _>("description"),
+                "category": l.get::<String, _>("category"),
+                "price_per_call_bnkr": l.get::<i64, _>("price_per_call_bnkr"),
+                "sla_latency_ms": l.get::<Option<i32>, _>("sla_latency_ms"),
+                "sla_uptime_pct": l.get::<Option<f32>, _>("sla_uptime_pct"),
+                "call_count": l.get::<i64, _>("call_count"),
+                "subscriber_count": l.get::<i32, _>("subscriber_count"),
+                "created_at": l.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
             })).collect();
             HttpResponse::Ok().json(json!({
                 "listings": items,
@@ -269,14 +269,14 @@ pub async fn subscribe(
     req: web::Json<SubscribeRequest>,
 ) -> impl Responder {
     // listing 확인
-    let listing = sqlx::query!(
+    let listing = sqlx::query(
         "SELECT owner_did, name, price_per_call_bnkr FROM api_listings WHERE id = $1 AND active = true",
-        req.listing_id
     )
+    .bind(req.listing_id)
     .fetch_optional(&state.db).await;
 
     let (owner_did, api_name, price) = match listing {
-        Ok(Some(l)) => (l.owner_did, l.name, l.price_per_call_bnkr),
+        Ok(Some(l)) => (l.get::<String, _>("owner_did"), l.get::<String, _>("name"), l.get::<i64, _>("price_per_call_bnkr")),
         Ok(None)    => return HttpResponse::NotFound().json(json!({"error": "listing not found"})),
         Err(e)      => return HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
     };
@@ -287,12 +287,13 @@ pub async fn subscribe(
     }
 
     // 중복 구독 방지
-    let already: i64 = sqlx::query_scalar!(
+    let already: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM api_subscriptions WHERE subscriber_did=$1 AND listing_id=$2 AND active=true",
-        req.subscriber_did, req.listing_id
     )
+    .bind(req.subscriber_did.clone())
+    .bind(req.listing_id)
     .fetch_one(&state.db).await
-    .unwrap_or(Some(0)).unwrap_or(0);
+    .unwrap_or(0);
 
     if already > 0 {
         return HttpResponse::BadRequest().json(json!({"error": "already subscribed"}));
@@ -300,33 +301,38 @@ pub async fn subscribe(
 
     // 구독 저장
     let sub_id = Uuid::new_v4();
-    let _ = sqlx::query!(
+    let _ = sqlx::query(
         r#"
         INSERT INTO api_subscriptions
             (id, subscriber_did, listing_id, owner_did, active, total_calls, total_paid_bnkr, subscribed_at)
         VALUES ($1, $2, $3, $4, true, 0, 0, NOW())
         "#,
-        sub_id, req.subscriber_did, req.listing_id, owner_did,
     )
+    .bind(sub_id)
+    .bind(req.subscriber_did.clone())
+    .bind(req.listing_id)
+    .bind(owner_did.clone())
     .execute(&state.db).await;
 
     // ★ 핵심: owner를 subscriber의 referrer로 등록
     // → 이후 모든 API 호출 시 owner가 15% 수수료 자동 수취
-    let _ = sqlx::query!(
+    let _ = sqlx::query(
         r#"
         UPDATE local_visas
         SET referrer_did = $1
         WHERE local_did = $2 AND referrer_did IS NULL
         "#,
-        owner_did, req.subscriber_did,
     )
+    .bind(owner_did.clone())
+    .bind(req.subscriber_did.clone())
     .execute(&state.db).await;
 
     // subscriber_count 증가
-    let _ = sqlx::query!(
+    let _ = sqlx::query(
         "UPDATE api_listings SET subscriber_count = subscriber_count + 1 WHERE id = $1",
-        req.listing_id
-    ).execute(&state.db).await;
+    )
+    .bind(req.listing_id)
+    .execute(&state.db).await;
 
     HttpResponse::Created().json(json!({
         "subscription_id": sub_id,
@@ -355,19 +361,20 @@ pub async fn proxy_call(
     req: web::Json<ProxyCallRequest>,
 ) -> impl Responder {
     // 구독 확인
-    let sub = sqlx::query!(
+    let sub = sqlx::query(
         r#"
         SELECT s.owner_did, l.endpoint_url, l.price_per_call_bnkr
         FROM api_subscriptions s
         JOIN api_listings l ON l.id = s.listing_id
         WHERE s.subscriber_did = $1 AND s.listing_id = $2 AND s.active = true AND l.active = true
         "#,
-        req.caller_did, req.listing_id
     )
+    .bind(req.caller_did.clone())
+    .bind(req.listing_id)
     .fetch_optional(&state.db).await;
 
     let (owner_did, endpoint_url, price) = match sub {
-        Ok(Some(s)) => (s.owner_did, s.endpoint_url, s.price_per_call_bnkr as u64),
+        Ok(Some(s)) => (s.get::<String, _>("owner_did"), s.get::<String, _>("endpoint_url"), s.get::<i64, _>("price_per_call_bnkr") as u64),
         Ok(None)    => return HttpResponse::Forbidden().json(json!({
             "error": "Not subscribed. Run: helm api subscribe --listing-id <id>"
         })),
@@ -375,10 +382,10 @@ pub async fn proxy_call(
     };
 
     // 잔액 확인
-    let balance: f64 = sqlx::query_scalar!(
+    let balance: f64 = sqlx::query_scalar(
         "SELECT balance_bnkr FROM local_visas WHERE local_did = $1",
-        req.caller_did
     )
+    .bind(req.caller_did.clone())
     .fetch_one(&state.db).await
     .unwrap_or(0.0);
 
@@ -393,7 +400,7 @@ pub async fn proxy_call(
 
     // 과금 선차감 (Checks-Effects-Interactions)
     let referrer_share = (price as f64 * 0.15) as i64;
-    let _ = sqlx::query!(
+    let _ = sqlx::query(
         r#"
         UPDATE local_visas
         SET balance_bnkr = balance_bnkr - $1,
@@ -401,14 +408,18 @@ pub async fn proxy_call(
             total_paid_bnkr = total_paid_bnkr + $1
         WHERE local_did = $2
         "#,
-        price as f64, req.caller_did
-    ).execute(&state.db).await;
+    )
+    .bind(price as f64)
+    .bind(req.caller_did.clone())
+    .execute(&state.db).await;
 
     // owner referrer 수수료 지급
-    let _ = sqlx::query!(
+    let _ = sqlx::query(
         "UPDATE local_visas SET balance_bnkr = balance_bnkr + $1 WHERE local_did = $2",
-        referrer_share as f64, owner_did
-    ).execute(&state.db).await;
+    )
+    .bind(referrer_share as f64)
+    .bind(owner_did.clone())
+    .execute(&state.db).await;
 
     // 실제 API 프록시 호출
     let api_result = state.http
@@ -418,20 +429,24 @@ pub async fn proxy_call(
         .send().await;
 
     // 호출 통계 업데이트
-    let _ = sqlx::query!(
+    let _ = sqlx::query(
         r#"
         UPDATE api_subscriptions
         SET total_calls = total_calls + 1,
             total_paid_bnkr = total_paid_bnkr + $1
         WHERE subscriber_did = $2 AND listing_id = $3
         "#,
-        price as i64, req.caller_did, req.listing_id
-    ).execute(&state.db).await;
+    )
+    .bind(price as i64)
+    .bind(req.caller_did.clone())
+    .bind(req.listing_id)
+    .execute(&state.db).await;
 
-    let _ = sqlx::query!(
+    let _ = sqlx::query(
         "UPDATE api_listings SET call_count = call_count + 1 WHERE id = $1",
-        req.listing_id
-    ).execute(&state.db).await;
+    )
+    .bind(req.listing_id)
+    .execute(&state.db).await;
 
     match api_result {
         Ok(r) => {
@@ -450,10 +465,12 @@ pub async fn proxy_call(
         }
         Err(e) => {
             // 실패 시 환불
-            let _ = sqlx::query!(
+            let _ = sqlx::query(
                 "UPDATE local_visas SET balance_bnkr = balance_bnkr + $1 WHERE local_did = $2",
-                price as f64, req.caller_did
-            ).execute(&state.db).await;
+            )
+            .bind(price as f64)
+            .bind(req.caller_did.clone())
+            .execute(&state.db).await;
             HttpResponse::BadGateway().json(json!({
                 "error": format!("Upstream API error: {}", e),
                 "refunded": price,
@@ -474,7 +491,7 @@ pub async fn my_listings(
         None    => return HttpResponse::BadRequest().json(json!({"error": "did required"})),
     };
 
-    let rows = sqlx::query!(
+    let rows = sqlx::query(
         r#"
         SELECT
             l.id, l.name, l.category, l.price_per_call_bnkr,
@@ -486,24 +503,27 @@ pub async fn my_listings(
         GROUP BY l.id
         ORDER BY l.created_at DESC
         "#,
-        did
     )
+    .bind(did)
     .fetch_all(&state.db).await;
 
     match rows {
         Ok(items) => HttpResponse::Ok().json(json!({
-            "listings": items.iter().map(|i| json!({
-                "id": i.id,
-                "name": i.name,
-                "category": i.category,
-                "price_per_call_bnkr": i.price_per_call_bnkr,
-                "call_count": i.call_count,
-                "subscriber_count": i.subscriber_count,
-                "total_earned_bnkr": i.total_earned,
-                "referrer_earned_bnkr": (i.total_earned.unwrap_or(0) as f64 * 0.15) as i64,
-                "active": i.active,
-                "created_at": i.created_at,
-            })).collect::<Vec<_>>()
+            "listings": items.iter().map(|i| {
+                let total_earned = i.get::<Option<i64>, _>("total_earned");
+                json!({
+                    "id": i.get::<uuid::Uuid, _>("id"),
+                    "name": i.get::<String, _>("name"),
+                    "category": i.get::<String, _>("category"),
+                    "price_per_call_bnkr": i.get::<i64, _>("price_per_call_bnkr"),
+                    "call_count": i.get::<i64, _>("call_count"),
+                    "subscriber_count": i.get::<i32, _>("subscriber_count"),
+                    "total_earned_bnkr": total_earned,
+                    "referrer_earned_bnkr": (total_earned.unwrap_or(0) as f64 * 0.15) as i64,
+                    "active": i.get::<bool, _>("active"),
+                    "created_at": i.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                })
+            }).collect::<Vec<_>>()
         })),
         Err(e) => HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
     }
