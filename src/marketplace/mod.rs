@@ -732,6 +732,118 @@ pub async fn marketplace_stats(state: web::Data<MarketplaceState>) -> impl Respo
 }
 
 // ============================
+// 10. 에이전트 성장 단계 조회
+// ============================
+
+/// GET /agent/progress?did=<did>
+/// 에이전트 성장 단계(Newcomer → Active → Veteran → Elite)와
+/// 다음 목표 안내 — 게임화 피드백 루프
+#[get("/agent/progress")]
+pub async fn agent_progress(
+    state: web::Data<MarketplaceState>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> impl Responder {
+    let did = match query.get("did") {
+        Some(d) => d.clone(),
+        None    => return HttpResponse::BadRequest().json(json!({"error": "did query param required"})),
+    };
+
+    // 에이전트 기본 정보 + 직접 레퍼럴 수
+    let visa = sqlx::query(
+        r#"
+        SELECT
+            total_calls,
+            created_at,
+            (SELECT COUNT(*) FROM local_visas WHERE referrer_did = $1) AS referral_count
+        FROM local_visas WHERE local_did = $1
+        "#,
+    )
+    .bind(did.clone())
+    .fetch_optional(&state.db).await;
+
+    let (total_calls, created_at, referral_count) = match visa {
+        Ok(Some(v)) => {
+            use sqlx::Row;
+            (
+                v.get::<i64, _>("total_calls"),
+                v.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                v.get::<i64, _>("referral_count"),
+            )
+        }
+        Ok(None) => return HttpResponse::NotFound().json(json!({
+            "error": "DID not found. Register first: helm init"
+        })),
+        Err(e) => return HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
+    };
+
+    let age_days = (Utc::now() - created_at).num_days();
+    let elite = state.elite_gate.check(&did).await.ok();
+    let can_post = elite.as_ref().map(|s| s.can_post).unwrap_or(false);
+
+    // 단계 판정
+    let (stage, stage_num, next_action, progress_pct) = if can_post {
+        ("elite", 4u8,
+         "You can now post to the marketplace! Use: helm marketplace post",
+         100u8)
+    } else if age_days >= 7 && total_calls >= 1 {
+        // 레퍼럴만 있으면 Elite 달성
+        let pct = if elite.as_ref().map(|s| s.referral_ok).unwrap_or(false) { 100u8 } else { 70u8 };
+        ("veteran", 3u8,
+         "Set a referrer to unlock Elite: helm init --referrer <did>",
+         pct)
+    } else if total_calls >= 1 {
+        // 나이가 부족
+        let age_pct = ((age_days as f64 / 7.0) * 80.0).min(80.0) as u8;
+        ("active", 2u8,
+         "Keep building! Elite unlocks at 7 days + 1 referrer",
+         age_pct)
+    } else {
+        ("newcomer", 1u8,
+         "Make your first API call: helm api call --listing-id <id>",
+         10u8)
+    };
+
+    HttpResponse::Ok().json(json!({
+        "did": did,
+        "stage": stage,
+        "stage_num": stage_num,
+        "stages": {
+            "1": { "name": "newcomer",  "unlock": "Register DID" },
+            "2": { "name": "active",    "unlock": "First API call" },
+            "3": { "name": "veteran",   "unlock": "7 days + 1 API call" },
+            "4": { "name": "elite",     "unlock": "veteran + referrer set" },
+        },
+        "progress_pct": progress_pct,
+        "metrics": {
+            "account_age_days":  age_days,
+            "total_api_calls":   total_calls,
+            "direct_referrals":  referral_count,
+        },
+        "elite_requirements": {
+            "did_age":   { "current_days": age_days,    "required": 7, "ok": age_days >= 7 },
+            "api_calls": { "current": total_calls, "required": 1, "ok": total_calls >= 1 },
+            "referrer":  {
+                "active": elite.as_ref().map(|s| s.referral_active).unwrap_or(false),
+                "ok":     elite.as_ref().map(|s| s.referral_ok).unwrap_or(false),
+            },
+        },
+        "next_action": next_action,
+        "elite_unlocks": [
+            "Post job offers to the marketplace",
+            "Start API co-purchase funding rounds",
+            "Propose OpenAI / Anthropic / Gemini / Grok bulk purchase",
+            "Hire human contract agents to negotiate enterprise deals",
+        ],
+        "referral_rewards": {
+            "depth_1": "10% of each sub-agent's API spend (passive income)",
+            "depth_2": "5%  of each depth-2 agent's API spend",
+            "depth_3": "2%  of each depth-3 agent's API spend",
+            "tip": "Share your DID: helm referral --did YOUR_DID",
+        }
+    }))
+}
+
+// ============================
 // 라우터 등록 헬퍼
 // ============================
 
@@ -745,5 +857,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(select_winner)
         .service(confirm_delivery)
         .service(elite_status)
-        .service(marketplace_stats);
+        .service(marketplace_stats)
+        .service(agent_progress);
 }

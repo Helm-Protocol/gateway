@@ -82,6 +82,10 @@ pub struct FundingPost {
     /// 구인 fee (인간 에이전트용)
     pub hire_fee:       Option<f64>,
     pub hire_fee_token: Option<String>,
+    /// API 공동구매: 공급사 연락처 (예: sales@openai.com)
+    pub api_vendor_contact: Option<String>,
+    /// API 공동구매: 최소 기여 단위 (예: 100 USDC)
+    pub min_contribution: Option<f64>,
     pub created_at:     DateTime<Utc>,
 }
 
@@ -106,12 +110,27 @@ pub struct CreateFundingRequest {
     pub category:      FundingCategory,
     pub goal_amount:   f64,
     pub token:         String,
-    /// 기한 (Unix timestamp 또는 ISO 8601)
-    pub deadline_days: u32,  // 오늘로부터 N일
+    /// 기한 (오늘로부터 N일)
+    pub deadline_days: u32,
     pub execution_plan: Option<String>,
     pub human_role:    Option<String>,
     pub hire_fee:      Option<f64>,
     pub hire_fee_token: Option<String>,
+    /// API 공동구매: 공급사 연락처
+    /// 예) "sales@openai.com", "enterprise@anthropic.com", "grok@xai.com"
+    pub api_vendor_contact: Option<String>,
+    /// API 공동구매: 에이전트당 최소 기여 단위
+    pub min_contribution: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExecuteFundingRequest {
+    pub author_did: String,
+    pub post_id:    Uuid,
+    /// 달성 후 등록된 API listing_id (공동구매 완료 시)
+    pub api_listing_id: Option<Uuid>,
+    /// 실행 메모 (계약 체결 결과, 진행 상황 등)
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -181,9 +200,10 @@ pub async fn create_funding(
           (id, author_did, title, description, category,
            goal_amount, token, raised_amount, contributor_count,
            status, deadline, execution_plan,
-           human_role, hire_fee, hire_fee_token, created_at)
+           human_role, hire_fee, hire_fee_token,
+           api_vendor_contact, min_contribution, created_at)
         VALUES
-          ($1,$2,$3,$4,$5, $6,$7,0,0, 'active',$8,$9, $10,$11,$12,NOW())
+          ($1,$2,$3,$4,$5, $6,$7,0,0, 'active',$8,$9, $10,$11,$12, $13,$14,NOW())
         "#,
     )
     .bind(post_id)
@@ -198,6 +218,8 @@ pub async fn create_funding(
     .bind(req.human_role.clone())
     .bind(req.hire_fee)
     .bind(req.hire_fee_token.clone())
+    .bind(req.api_vendor_contact.clone())
+    .bind(req.min_contribution)
     .execute(&state.db).await;
 
     match r {
@@ -207,9 +229,15 @@ pub async fn create_funding(
             "goal": format!("{} {}", req.goal_amount, req.token),
             "deadline": deadline,
             "category": req.category,
+            "api_vendor_contact": req.api_vendor_contact,
+            "min_contribution": req.min_contribution,
             "tip": {
-                "api_pooling": "Share the post_id so agents can contribute with: helm marketplace fund-contribute --post <id>",
-                "human_hire":  "Human agents can see this on the marketplace and apply directly",
+                "contribute": format!("helm marketplace fund-contribute --post {}", post_id),
+                "api_pooling": "Contributors earn proportional revenue share when the co-purchased API is resold",
+                "human_hire":  "Human agents can apply directly from the marketplace listing",
+                "openai_contact": "OpenAI enterprise: sales@openai.com (min ~$10,000/month)",
+                "anthropic_contact": "Anthropic enterprise: enterprise@anthropic.com",
+                "groq_contact": "Groq API: console.groq.com (generous free tier available)",
             }
         })),
         Err(e) => HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
@@ -421,10 +449,105 @@ pub async fn contribute(
     }))
 }
 
+/// POST /marketplace/funding/execute
+/// 펀딩 목표 달성 후 실행 (게시자 전용)
+/// - 상태를 'executed'로 변경
+/// - 공동구매 완료 API listing_id 연결 (선택)
+/// - 기여자들은 연결된 API 수익에서 기여 비율만큼 자동 배분 받음
+#[post("/marketplace/funding/execute")]
+pub async fn execute_funding(
+    state:    web::Data<FundingState>,
+    http_req: HttpRequest,
+    req:      web::Json<ExecuteFundingRequest>,
+) -> impl Responder {
+    // JWT 인증
+    if let Err(r) = auth::require_auth(&http_req, &req.author_did, &state.did_service) {
+        return r;
+    }
+
+    // 게시글 확인 + 본인 체크
+    let post = sqlx::query(
+        "SELECT author_did, status, goal_amount, raised_amount, token FROM funding_posts WHERE id=$1",
+    )
+    .bind(req.post_id)
+    .fetch_optional(&state.db).await;
+
+    let (goal, raised, token) = match post {
+        Ok(Some(p)) => {
+            use sqlx::Row;
+            if p.get::<String, _>("author_did") != req.author_did {
+                return HttpResponse::Forbidden().json(json!({"error": "only post author can execute"}));
+            }
+            let status = p.get::<String, _>("status");
+            if status != "reached" && status != "active" {
+                return HttpResponse::BadRequest().json(json!({
+                    "error": format!("Cannot execute funding with status '{}'", status),
+                    "hint": "Funding must be in 'active' or 'reached' status"
+                }));
+            }
+            (
+                p.get::<f64, _>("goal_amount"),
+                p.get::<f64, _>("raised_amount"),
+                p.get::<String, _>("token"),
+            )
+        }
+        Ok(None) => return HttpResponse::NotFound().json(json!({"error": "funding post not found"})),
+        Err(e)   => return HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
+    };
+
+    // 실행 처리
+    let _ = sqlx::query(
+        "UPDATE funding_posts SET status='executed', execution_plan=COALESCE($1, execution_plan) WHERE id=$2",
+    )
+    .bind(req.note.clone())
+    .bind(req.post_id)
+    .execute(&state.db).await;
+
+    // 기여자 목록 조회 (비율 계산용)
+    let contributors = sqlx::query(
+        r#"
+        SELECT contributor_did, SUM(amount) as contributed
+        FROM funding_contributions
+        WHERE post_id = $1 AND refunded = false
+        GROUP BY contributor_did
+        ORDER BY contributed DESC
+        "#,
+    )
+    .bind(req.post_id)
+    .fetch_all(&state.db).await.unwrap_or_default();
+
+    let contrib_list: Vec<serde_json::Value> = contributors.iter().map(|c| {
+        use sqlx::Row;
+        let contributed = c.get::<f64, _>("contributed");
+        let share_pct   = if raised > 0.0 { contributed / raised * 100.0 } else { 0.0 };
+        json!({
+            "contributor_did": c.get::<String, _>("contributor_did"),
+            "contributed": format!("{} {}", contributed, token),
+            "revenue_share_pct": share_pct,
+        })
+    }).collect();
+
+    HttpResponse::Ok().json(json!({
+        "post_id": req.post_id,
+        "status": "executed",
+        "total_raised": format!("{} {}", raised, token),
+        "goal": format!("{} {}", goal, token),
+        "api_listing_id": req.api_listing_id,
+        "note": req.note,
+        "contributors": contrib_list,
+        "revenue_distribution": {
+            "model": "Each contributor earns proportional to their funding share",
+            "api_listing_id": req.api_listing_id,
+            "note": "When the co-purchased API earns revenue, contributors receive their % share automatically",
+        }
+    }))
+}
+
 /// 라우터 등록
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg
         .service(create_funding)
         .service(list_funding)
-        .service(contribute);
+        .service(contribute)
+        .service(execute_funding);
 }

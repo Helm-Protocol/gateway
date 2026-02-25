@@ -8,17 +8,29 @@
 //
 //   2. 에이전트 B가 A의 API를 구독 (helm api subscribe)
 //      → api_subscriptions에 기록
-//      → A가 B의 referrer로 등록 (15% 수수료 흐름 활성화)
 //
 //   3. B가 A를 통해 API 호출 (helm api call --via <A-did>)
 //      → Gateway가 A의 endpoint로 프록시
-//      → billing.rs: B 과금 → 85% Treasury, 15% A (referrer)
-//      → A는 자신의 upstream 비용을 직접 부담 (마진 보장)
+//      → 3-tier 레퍼럴 수수료 분배:
+//           B가 10 BNKR 지불
+//             ├─ 1.5 BNKR → A (API 중개자 수수료 15%)
+//             ├─ 1.0 BNKR → B의 depth-1 referrer (10%)
+//             ├─ 0.5 BNKR → B의 depth-2 referrer (5%)
+//             ├─ 0.2 BNKR → B의 depth-3 referrer (2%)
+//             └─ 6.8 BNKR → Gateway Treasury (최대치 기준)
 //
-// 수익 구조:
-//   B가 10 BNKR 냄
-//     └─ 8.5 BNKR → Treasury
-//     └─ 1.5 BNKR → A (referrer 수수료)
+// 등록 가능한 외부 API 카테고리:
+//   llm             — Groq, Together AI, Mistral, Replicate
+//   search          — Brave Search, Tavily, Serper, Perplexity
+//   defi            — DeFiLlama(무료), The Graph(무료), Pyth(무료), 1inch
+//   compute         — E2B sandboxes, Modal serverless
+//   storage         — IPFS/Pinata, Arweave, Filecoin
+//   prediction_market — Polymarket(무료), Manifold(무료), Metaculus
+//   data_feed       — Alpha Vantage, FRED(무료), Polygon.io, Fixer.io
+//   ai_media        — Stability AI, ElevenLabs, AssemblyAI, DeepL
+//   web_agent       — Firecrawl, Browserbase, Jina AI
+//   identity        — ENS(무료), Gitcoin Passport, WorldID, Lens
+//   custom          — 기타
 //   A의 upstream 비용은 A가 직접 관리
 //   A는 가격을 올려서 마진을 만든다
 
@@ -57,12 +69,17 @@ pub struct ApiListing {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiCategory {
-    Llm,        // LLM 프록시 (GPT-4, Claude, Llama 등)
-    Search,     // 검색 API
-    Defi,       // DeFi 오라클
-    Compute,    // 일반 연산
-    Storage,    // 데이터 저장
-    Custom,     // 기타
+    Llm,             // GPT-4, Claude, Groq, Together AI, Mistral, Replicate
+    Search,          // Brave Search, Tavily, Serper, Perplexity
+    Defi,            // DeFiLlama, The Graph, Pyth, Chainlink, 1inch, Uniswap
+    Compute,         // E2B sandboxes, Modal, serverless compute
+    Storage,         // IPFS/Pinata, Arweave, Filecoin, Walrus
+    PredictionMarket,// Polymarket, Manifold, Metaculus, Kalshi, Gnosis
+    DataFeed,        // Alpha Vantage, FRED, Polygon.io, Fixer.io, OpenWeather
+    AiMedia,         // Stability AI, ElevenLabs, AssemblyAI, DeepL, Whisper
+    WebAgent,        // Firecrawl, Browserbase, Jina AI, SerpAPI scraping
+    Identity,        // ENS, Gitcoin Passport, WorldID, Lens Protocol, Privy
+    Custom,          // 기타 (any endpoint)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -113,6 +130,11 @@ pub struct ListApiQuery {
     pub owner_did: Option<String>,
     pub page: Option<u32>,
     pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NetworkQuery {
+    pub did: String,
 }
 
 // ============================
@@ -369,7 +391,15 @@ pub async fn subscribe(
 }
 
 /// POST /api-registry/call
-/// B가 A의 API를 Gateway를 통해 호출 (과금 + 프록시)
+/// B가 A의 API를 Gateway를 통해 호출 (3-tier 레퍼럴 수수료 분배)
+///
+/// 수익 분배:
+///   caller pays price BNKR
+///     ├─ 15% → API owner A (중개 수수료)
+///     ├─ 10% → caller의 depth-1 referrer
+///     ├─  5% → caller의 depth-2 referrer
+///     ├─  2% → caller의 depth-3 referrer
+///     └─ 68% → Gateway Treasury (referrer 없으면 최대 85%)
 #[post("/api-registry/call")]
 pub async fn proxy_call(
     state:    web::Data<ApiRegistryState>,
@@ -380,6 +410,7 @@ pub async fn proxy_call(
     if let Err(r) = auth::require_auth(&http_req, &req.caller_did, &state.did_service) {
         return r;
     }
+
     // 구독 확인
     let sub = sqlx::query(
         r#"
@@ -418,11 +449,44 @@ pub async fn proxy_call(
         }));
     }
 
-    // ── 원자적 과금 트랜잭션 (Checks-Effects-Interactions) ──────────
-    // 차감 + 수수료 지급을 하나의 트랜잭션으로 묶어 Race Condition 방지
-    let owner_share = (price as f64 * 0.15) as f64;  // 15% → API owner
-    // 85%는 Gateway Treasury (별도 정산 — 현재는 차감분에서 암묵적 보유)
+    // ── [3-tier 레퍼럴] 호출자의 레퍼럴 체인 조회 ──────────────────
+    // 재귀 CTE: depth 1 = 직접 소개자, 2 = 소개자의 소개자, 3 = 3단계
+    let referral_rows = sqlx::query(
+        r#"
+        WITH RECURSIVE rc AS (
+            SELECT local_did, referrer_did, 1 AS depth
+            FROM local_visas
+            WHERE local_did = $1 AND referrer_did IS NOT NULL
+            UNION ALL
+            SELECT v.local_did, v.referrer_did, rc.depth + 1
+            FROM local_visas v
+            JOIN rc ON v.local_did = rc.referrer_did
+            WHERE rc.depth < 3 AND rc.referrer_did IS NOT NULL
+        )
+        SELECT referrer_did, depth FROM rc ORDER BY depth
+        "#,
+    )
+    .bind(req.caller_did.clone())
+    .fetch_all(&state.db).await.unwrap_or_default();
 
+    let ref1_did: Option<String> = referral_rows.iter()
+        .find(|r| r.get::<i32, _>("depth") == 1)
+        .map(|r| r.get::<String, _>("referrer_did"));
+    let ref2_did: Option<String> = referral_rows.iter()
+        .find(|r| r.get::<i32, _>("depth") == 2)
+        .map(|r| r.get::<String, _>("referrer_did"));
+    let ref3_did: Option<String> = referral_rows.iter()
+        .find(|r| r.get::<i32, _>("depth") == 3)
+        .map(|r| r.get::<String, _>("referrer_did"));
+
+    // ── 수수료 계산 ──────────────────────────────────────────────────
+    let owner_share = price as f64 * 0.15;  // 15% → API owner
+    let ref1_share  = price as f64 * 0.10;  // 10% → depth-1 referrer
+    let ref2_share  = price as f64 * 0.05;  //  5% → depth-2 referrer
+    let ref3_share  = price as f64 * 0.02;  //  2% → depth-3 referrer
+    // 나머지 (68~85%) → Gateway Treasury (암묵적 보유)
+
+    // ── 원자적 과금 트랜잭션 (Checks-Effects-Interactions) ──────────
     let mut billing_tx = match state.db.begin().await {
         Ok(t)  => t,
         Err(e) => return HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
@@ -457,7 +521,7 @@ pub async fn proxy_call(
         _ => {}
     }
 
-    // 2. API owner 수수료 지급 (15%)
+    // 2. API owner 수수료 (15%)
     let _ = sqlx::query(
         "UPDATE local_visas SET balance_bnkr = balance_bnkr + $1 WHERE local_did = $2",
     )
@@ -465,26 +529,45 @@ pub async fn proxy_call(
     .bind(owner_did.clone())
     .execute(&mut *billing_tx).await;
 
+    // 3. 3-tier 레퍼럴 수수료 분배 (depth 1→10%, 2→5%, 3→2%)
+    if let Some(ref did1) = ref1_did {
+        let _ = sqlx::query(
+            "UPDATE local_visas SET balance_bnkr = balance_bnkr + $1 WHERE local_did = $2",
+        )
+        .bind(ref1_share)
+        .bind(did1.clone())
+        .execute(&mut *billing_tx).await;
+    }
+    if let Some(ref did2) = ref2_did {
+        let _ = sqlx::query(
+            "UPDATE local_visas SET balance_bnkr = balance_bnkr + $1 WHERE local_did = $2",
+        )
+        .bind(ref2_share)
+        .bind(did2.clone())
+        .execute(&mut *billing_tx).await;
+    }
+    if let Some(ref did3) = ref3_did {
+        let _ = sqlx::query(
+            "UPDATE local_visas SET balance_bnkr = balance_bnkr + $1 WHERE local_did = $2",
+        )
+        .bind(ref3_share)
+        .bind(did3.clone())
+        .execute(&mut *billing_tx).await;
+    }
+
     if let Err(e) = billing_tx.commit().await {
         return HttpResponse::InternalServerError().json(json!({"error": e.to_string()}));
     }
 
-    // ── BillingLedger 기록 (85/15 Treasury 추적) ──────────────────
+    // ── BillingLedger 기록 (Treasury 추적) ───────────────────────────
     {
-        let referrer_did: Option<String> = sqlx::query_scalar(
-            "SELECT referrer_did FROM local_visas WHERE local_did = $1",
-        )
-        .bind(req.caller_did.clone())
-        .fetch_one(&state.db).await.ok().flatten();
-
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-
         state.billing.lock().record_call(
             &req.caller_did,
-            referrer_did.as_deref(),
+            ref1_did.as_deref(),
             &format!("api-registry/{}", req.listing_id),
             1,
             ts,
@@ -518,6 +601,12 @@ pub async fn proxy_call(
     .bind(req.listing_id)
     .execute(&state.db).await;
 
+    // 실제 treasury 기여분 = price - owner - referrers
+    let referral_total = ref1_did.as_ref().map(|_| ref1_share).unwrap_or(0.0)
+        + ref2_did.as_ref().map(|_| ref2_share).unwrap_or(0.0)
+        + ref3_did.as_ref().map(|_| ref3_share).unwrap_or(0.0);
+    let treasury_approx = price as f64 - owner_share - referral_total;
+
     match api_result {
         Ok(r) => {
             let upstream_status = r.status().as_u16();
@@ -526,15 +615,19 @@ pub async fn proxy_call(
                 "result": body,
                 "billing": {
                     "charged_bnkr": price,
-                    "treasury_bnkr": (price as f64 * 0.85) as u64,
-                    "owner_commission_bnkr": owner_share as u64,
-                    "owner_did": owner_did,
+                    "api_owner_bnkr": owner_share as u64,
+                    "referral_rewards": {
+                        "depth_1": { "did": ref1_did.as_deref(), "bnkr": ref1_did.as_ref().map(|_| ref1_share as u64).unwrap_or(0) },
+                        "depth_2": { "did": ref2_did.as_deref(), "bnkr": ref2_did.as_ref().map(|_| ref2_share as u64).unwrap_or(0) },
+                        "depth_3": { "did": ref3_did.as_deref(), "bnkr": ref3_did.as_ref().map(|_| ref3_share as u64).unwrap_or(0) },
+                    },
+                    "treasury_bnkr": treasury_approx as u64,
                 },
                 "upstream_status": upstream_status,
             }))
         }
         Err(e) => {
-            // 업스트림 실패 시 환불 트랜잭션 (호출자에게 반환, owner share도 회수)
+            // 업스트림 실패 → 전액 환불 (호출자 + owner + 모든 referrer 원상복구)
             if let Ok(mut refund_tx) = state.db.begin().await {
                 let _ = sqlx::query(
                     "UPDATE local_visas SET balance_bnkr = balance_bnkr + $1 WHERE local_did = $2",
@@ -550,6 +643,24 @@ pub async fn proxy_call(
                 .bind(owner_did.clone())
                 .execute(&mut *refund_tx).await;
 
+                if let Some(ref did1) = ref1_did {
+                    let _ = sqlx::query(
+                        "UPDATE local_visas SET balance_bnkr = balance_bnkr - $1 WHERE local_did = $2 AND balance_bnkr >= $1",
+                    )
+                    .bind(ref1_share).bind(did1.clone()).execute(&mut *refund_tx).await;
+                }
+                if let Some(ref did2) = ref2_did {
+                    let _ = sqlx::query(
+                        "UPDATE local_visas SET balance_bnkr = balance_bnkr - $1 WHERE local_did = $2 AND balance_bnkr >= $1",
+                    )
+                    .bind(ref2_share).bind(did2.clone()).execute(&mut *refund_tx).await;
+                }
+                if let Some(ref did3) = ref3_did {
+                    let _ = sqlx::query(
+                        "UPDATE local_visas SET balance_bnkr = balance_bnkr - $1 WHERE local_did = $2 AND balance_bnkr >= $1",
+                    )
+                    .bind(ref3_share).bind(did3.clone()).execute(&mut *refund_tx).await;
+                }
                 let _ = refund_tx.commit().await;
             }
             HttpResponse::BadGateway().json(json!({
@@ -616,6 +727,106 @@ pub async fn my_listings(
     }
 }
 
+/// GET /agent/network?did=<did>
+/// 내 레퍼럴 네트워크 트리 조회 (depth 1/2/3)
+/// — 내가 초대한 에이전트 + 그들이 초대한 에이전트의 활동 통계
+#[get("/agent/network")]
+pub async fn agent_network(
+    state: web::Data<ApiRegistryState>,
+    query: web::Query<NetworkQuery>,
+) -> impl Responder {
+    let did = query.did.clone();
+
+    // 재귀 CTE: depth 1 = 직접 초대, 2 = 2단계, 3 = 3단계
+    let net_rows = sqlx::query(
+        r#"
+        WITH RECURSIVE net AS (
+            SELECT local_did, total_calls, total_paid_bnkr, 1 AS depth
+            FROM local_visas
+            WHERE referrer_did = $1
+            UNION ALL
+            SELECT v.local_did, v.total_calls, v.total_paid_bnkr, net.depth + 1
+            FROM local_visas v
+            JOIN net ON v.referrer_did = net.local_did
+            WHERE net.depth < 3
+        )
+        SELECT local_did, total_calls, total_paid_bnkr, depth
+        FROM net
+        ORDER BY depth, total_calls DESC
+        "#,
+    )
+    .bind(did.clone())
+    .fetch_all(&state.db).await;
+
+    let rows = match net_rows {
+        Ok(r)  => r,
+        Err(e) => return HttpResponse::InternalServerError().json(json!({"error": e.to_string()})),
+    };
+
+    let mut depth1: Vec<serde_json::Value> = vec![];
+    let mut depth2_count: i64 = 0;
+    let mut depth3_count: i64 = 0;
+    let mut total_network_calls: i64 = 0;
+    let mut total_earnings: f64 = 0.0;
+
+    for row in &rows {
+        let depth  = row.get::<i32, _>("depth");
+        let calls  = row.get::<i64, _>("total_calls");
+        let paid   = row.get::<f64, _>("total_paid_bnkr");
+        total_network_calls += calls;
+
+        let (share_pct, earning) = match depth {
+            1 => (0.10, paid * 0.10),
+            2 => (0.05, paid * 0.05),
+            3 => (0.02, paid * 0.02),
+            _ => (0.0, 0.0),
+        };
+        total_earnings += earning;
+
+        if depth == 1 {
+            depth1.push(json!({
+                "did": row.get::<String, _>("local_did"),
+                "total_calls": calls,
+                "total_paid_bnkr": paid,
+                "your_share_pct": (share_pct * 100.0) as u32,
+                "your_earned_bnkr": earning,
+            }));
+        } else if depth == 2 {
+            depth2_count += 1;
+        } else if depth == 3 {
+            depth3_count += 1;
+        }
+    }
+
+    let total_agents = rows.len() as i64;
+    HttpResponse::Ok().json(json!({
+        "did": did,
+        "network": {
+            "total_agents": total_agents,
+            "depth_1_agents": depth1.len(),
+            "depth_2_agents": depth2_count,
+            "depth_3_agents": depth3_count,
+        },
+        "activity": {
+            "total_network_api_calls": total_network_calls,
+        },
+        "your_earnings": {
+            "total_earned_bnkr": total_earnings,
+            "model": {
+                "depth_1": "10% of each direct referral's API spend",
+                "depth_2": "5% of each depth-2 agent's API spend",
+                "depth_3": "2% of each depth-3 agent's API spend",
+            }
+        },
+        "top_contributors": depth1.into_iter().take(10).collect::<Vec<_>>(),
+        "tip": if total_agents == 0 {
+            "No network yet. Share your DID: helm referral --did YOUR_DID"
+        } else {
+            "Help your depth-1 agents grow — their sub-referrals earn you rewards too"
+        }
+    }))
+}
+
 /// 라우터 등록
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg
@@ -623,5 +834,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(list_apis)
         .service(subscribe)
         .service(proxy_call)
-        .service(my_listings);
+        .service(my_listings)
+        .service(agent_network);
 }
