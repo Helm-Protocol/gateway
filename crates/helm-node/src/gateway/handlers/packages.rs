@@ -129,6 +129,14 @@ pub async fn handle_alpha_hunt(
         }
     }
 
+    // Pre-charge 10 VIRTUAL BEFORE expensive computation (C32: billing bypass prevention)
+    let virtual_charged = packages::ALPHA_HUNT_PER_CALL;
+    state.deduct_balance(&did, virtual_charged).await.map_err(|avail| (
+        StatusCode::PAYMENT_REQUIRED,
+        Json(json!({"error": "insufficient_balance", "required": virtual_charged, "available": avail,
+                    "message": "Need 10 VIRTUAL for Alpha Hunt package."})),
+    ))?;
+
     // Step 1: Sync-O — compute data entropy as freshness proxy
     let data_bytes = req.signal.as_bytes();
     let byte_entropy = compute_entropy(data_bytes);
@@ -139,6 +147,14 @@ pub async fn handle_alpha_hunt(
 
     // Step 3: Sense Cortex — run QKV-G attention on the signal
     let mut attention_cache = state.attention_cache.write().await;
+    // C37: Evict oldest entry when cache is at capacity (mirrors cortex.rs OOM protection)
+    if attention_cache.len() >= crate::gateway::state::MAX_ATTENTION_CACHE_ENTRIES
+        && !attention_cache.contains_key(&did)
+    {
+        if let Some(evict_key) = attention_cache.keys().next().cloned() {
+            attention_cache.remove(&evict_key);
+        }
+    }
     let (engine, seq_idx) = attention_cache
         .entry(did.clone())
         .or_insert_with(|| {
@@ -227,8 +243,7 @@ pub async fn handle_alpha_hunt(
 
     let processing_ns = t_start.elapsed().as_nanos() as u64;
 
-    // Alpha Hunt pricing: 10 VIRTUAL flat
-    let virtual_charged = packages::ALPHA_HUNT_PER_CALL;
+    // virtual_charged was pre-computed and deducted above (C32)
     state.record_api_call(&did, "package/alpha-hunt", virtual_charged).await;
 
     Ok(Json(AlphaHuntResponse {
@@ -298,6 +313,17 @@ pub async fn handle_protocol_shield(
         }))));
     }
 
+    // Pre-charge BEFORE GRG processing (C33: billing bypass prevention).
+    // Fee is computed from raw_data size (known after decode, before costly pipeline).
+    let virtual_charged = packages::PROTOCOL_SHIELD_PER_MB
+        .saturating_mul((raw_data.len() as u64).max(1) / 1024 + 1);
+    let virtual_charged = virtual_charged.min(10 * VIRTUAL_UNIT);
+    state.deduct_balance(&did, virtual_charged).await.map_err(|avail| (
+        StatusCode::PAYMENT_REQUIRED,
+        Json(json!({"error": "insufficient_balance", "required": virtual_charged, "available": avail,
+                    "message": "Insufficient VIRTUAL balance for Protocol Shield."})),
+    ))?;
+
     // Run GRG pipeline (Sync-O)
     let pipeline = helm_engine::GrgPipeline::new(helm_engine::GrgMode::Safety)
         .with_data_shards(4);
@@ -320,11 +346,7 @@ pub async fn handle_protocol_shield(
     let bandwidth_saved_kb = (raw_data.len() as f64 * (1.0 - entropy)) / 1024.0;
     let processing_ns = t_start.elapsed().as_nanos() as u64;
 
-    // Protocol Shield pricing: 5 VIRTUAL per call
-    let virtual_charged = packages::PROTOCOL_SHIELD_PER_MB
-        .saturating_mul((raw_data.len() as u64).max(1) / 1024 + 1);
-    let virtual_charged = virtual_charged.min(10 * VIRTUAL_UNIT); // Cap at 10 VIRTUAL
-
+    // virtual_charged was pre-computed and deducted above (C33)
     state.record_api_call(&did, "package/protocol-shield", virtual_charged).await;
 
     let recommendation = if clean_ratio > 0.8 {

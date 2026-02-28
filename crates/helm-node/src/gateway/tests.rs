@@ -691,7 +691,7 @@ mod gateway_tests {
         let (_, pool_resp) = create_pool(&state, &creator, 100.0, 10_000_000).await;
         let pool_id = pool_resp["pool_id"].as_str().unwrap().to_string();
 
-        // Welcome credits = 10_000_000. Stake more than that.
+        // Welcome credits = 5_000_000. Stake more than that.
         let (status, resp) = join_pool(&state, &attacker, &pool_id, 999_999_999_999).await;
         assert_eq!(status, StatusCode::PAYMENT_REQUIRED, "Excessive stake must fail: {resp}");
         assert_eq!(resp["error"], "insufficient_balance");
@@ -1063,6 +1063,9 @@ mod gateway_tests {
         assert!(resp["g_score"].is_number());
 
         // 6. Pool create
+        // Top up: memory writes + cortex may have consumed most of the 5V welcome credits.
+        // Pool creation now costs 5V (C34 fee enforcement), so ensure sufficient balance.
+        top_up(&state, &did, 5_000_000).await;
         let (s, pool_resp) = create_pool(&state, &did, 99.0, 5_000_000).await;
         assert_eq!(s, StatusCode::CREATED, "Pool create failed: {pool_resp}");
         let pool_id = pool_resp["pool_id"].as_str().unwrap().to_string();
@@ -1196,6 +1199,8 @@ mod gateway_tests {
         assert_eq!(resp["did_age_days"].as_u64().unwrap_or(99), 0);
 
         // A creates a pool; B joins with small stake
+        // Top up: A's balance may be below 5V after memory ops (C34 fee enforcement)
+        top_up(&state, &did_a, 5_000_000).await;
         let (s, pool_resp) = create_pool(&state, &did_a, 25.0, 5_000_000).await;
         assert_eq!(s, StatusCode::CREATED);
         let pool_id = pool_resp["pool_id"].as_str().unwrap().to_string();
@@ -1921,5 +1926,267 @@ mod gateway_tests {
             StatusCode::OK,
             "Stake at exactly MIN_STAKE must succeed: {resp}"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // C30: Memory write/read actually deducts virtual_balance
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_attack_c30_memory_write_charges_balance() {
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+
+        let before = get_balance(&state, &did).await;
+        let (s, _) = mem_put(&state, &did, "charge_test", json!("hello")).await;
+        assert_eq!(s, StatusCode::OK, "Memory write should succeed");
+        let after = get_balance(&state, &did).await;
+
+        // Write fee = 50_000 μV
+        assert_eq!(before - after, 50_000, "Memory write must deduct exactly 50_000 μV");
+    }
+
+    #[tokio::test]
+    async fn test_attack_c30_memory_read_charges_balance() {
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+
+        let (s, _) = mem_put(&state, &did, "rtest", json!(42)).await;
+        assert_eq!(s, StatusCode::OK);
+
+        let before = get_balance(&state, &did).await;
+        let (s, _) = mem_get(&state, &did, "rtest").await;
+        assert_eq!(s, StatusCode::OK);
+        let after = get_balance(&state, &did).await;
+
+        // Read fee = 100 μV
+        assert_eq!(before - after, 100, "Memory read must deduct exactly 100 μV");
+    }
+
+    #[tokio::test]
+    async fn test_attack_c30_memory_write_zero_balance_rejected() {
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+        drain_balance(&state, &did).await;
+
+        let (status, resp) = mem_put(&state, &did, "should_fail", json!("x")).await;
+        assert_eq!(status, StatusCode::PAYMENT_REQUIRED, "Zero-balance write must fail: {resp}");
+        assert_eq!(resp["error"], "insufficient_balance");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // C31: Synco charges virtual_balance before processing
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_attack_c31_synco_zero_balance_rejected() {
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+        drain_balance(&state, &did).await;
+
+        use base64::Engine;
+        let data_b64 = base64::engine::general_purpose::STANDARD.encode(b"hello synco");
+        let (status, resp) = req(
+            state.clone(),
+            axum::http::Method::POST,
+            "/v1/synco/stream",
+            Some(&did),
+            Some(json!({"data_b64": data_b64, "protocol": "test"})),
+        ).await;
+        assert_eq!(status, StatusCode::PAYMENT_REQUIRED, "Zero-balance synco must fail: {resp}");
+        assert_eq!(resp["error"], "insufficient_balance");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // C32: Alpha Hunt charges virtual_balance (10V)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_attack_c32_alpha_hunt_charges_balance() {
+        use crate::gateway::pricing::packages::ALPHA_HUNT_PER_CALL;
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+        top_up(&state, &did, 20_000_000).await; // 20V extra
+
+        let before = get_balance(&state, &did).await;
+        let (s, _) = req(
+            state.clone(),
+            axum::http::Method::POST,
+            "/v1/package/alpha-hunt",
+            Some(&did),
+            Some(json!({"signal": "ETH whale movement detected", "market": "defi"})),
+        ).await;
+        assert_eq!(s, StatusCode::OK, "Alpha Hunt should succeed with sufficient balance");
+        let after = get_balance(&state, &did).await;
+
+        assert_eq!(before - after, ALPHA_HUNT_PER_CALL,
+            "Alpha Hunt must deduct exactly {} μV", ALPHA_HUNT_PER_CALL);
+    }
+
+    #[tokio::test]
+    async fn test_attack_c32_alpha_hunt_zero_balance_rejected() {
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+        drain_balance(&state, &did).await;
+
+        let (status, resp) = req(
+            state.clone(),
+            axum::http::Method::POST,
+            "/v1/package/alpha-hunt",
+            Some(&did),
+            Some(json!({"signal": "free signal attempt", "market": "defi"})),
+        ).await;
+        assert_eq!(status, StatusCode::PAYMENT_REQUIRED, "Zero-balance alpha-hunt must fail: {resp}");
+        assert_eq!(resp["error"], "insufficient_balance");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // C33: Protocol Shield charges virtual_balance
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_attack_c33_protocol_shield_zero_balance_rejected() {
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+        drain_balance(&state, &did).await;
+
+        use base64::Engine;
+        let data_b64 = base64::engine::general_purpose::STANDARD.encode(b"akash data");
+        let (status, resp) = req(
+            state.clone(),
+            axum::http::Method::POST,
+            "/v1/package/protocol-shield",
+            Some(&did),
+            Some(json!({"protocol": "akash", "data_b64": data_b64})),
+        ).await;
+        assert_eq!(status, StatusCode::PAYMENT_REQUIRED, "Zero-balance protocol-shield must fail: {resp}");
+        assert_eq!(resp["error"], "insufficient_balance");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // C34: Pool creation fee (5V) is actually deducted from virtual_balance
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_attack_c34_pool_creation_fee_deducted() {
+        use crate::gateway::pricing::VIRTUAL_UNIT;
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+
+        let before = get_balance(&state, &did).await;
+        let (s, resp) = create_pool(&state, &did, 50.0, 10_000_000).await;
+        assert_eq!(s, StatusCode::CREATED, "Pool create failed: {resp}");
+        let after = get_balance(&state, &did).await;
+
+        // creation_fee = 5 VIRTUAL = 5_000_000 μV, initial = 0
+        assert_eq!(before - after, 5 * VIRTUAL_UNIT,
+            "Pool creation must deduct exactly 5 VIRTUAL");
+    }
+
+    #[tokio::test]
+    async fn test_attack_c34_pool_creation_zero_balance_rejected() {
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+        drain_balance(&state, &did).await;
+
+        let (status, resp) = create_pool(&state, &did, 50.0, 10_000_000).await;
+        assert_eq!(status, StatusCode::PAYMENT_REQUIRED, "Zero-balance pool create must fail: {resp}");
+        assert_eq!(resp["error"], "insufficient_balance");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // C35: Pool creation initial_contribution + creation_fee atomic deduction
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_attack_c35_pool_create_initial_plus_fee_deducted() {
+        use crate::gateway::pricing::VIRTUAL_UNIT;
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+        top_up(&state, &did, 10_000_000).await; // ensure 15V total
+
+        let before = get_balance(&state, &did).await;
+        let initial = 2_000_000u64; // 2 VIRTUAL initial contribution
+
+        let (s, resp) = req(
+            state.clone(),
+            axum::http::Method::POST,
+            "/v1/pool",
+            Some(&did),
+            Some(json!({
+                "name": "AtomicTest",
+                "vendor": "openai",
+                "monthly_cost_usd": 100.0,
+                "bnkr_goal": 10_000_000u64,
+                "initial_contribution": initial,
+            })),
+        ).await;
+        assert_eq!(s, StatusCode::CREATED, "Pool create with initial failed: {resp}");
+        let after = get_balance(&state, &did).await;
+
+        // Should deduct initial (2V) + creation_fee (5V) = 7V atomically
+        assert_eq!(before - after, initial + 5 * VIRTUAL_UNIT,
+            "Atomic deduction must equal initial + 5V creation fee");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // C39: FICO pool_memberships uses O(1) agent.pool_ids (not O(n×m) scan)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_attack_c39_fico_pool_memberships_accurate() {
+        let state = AppState::new();
+        let (did_a, _) = boot(&state, None).await;
+        let (did_b, _) = boot(&state, None).await;
+
+        // A creates pool with initial contribution → A should be a member
+        top_up(&state, &did_a, 10_000_000).await;
+        let initial = 1_000_000u64;
+        let (s, pool_resp) = req(
+            state.clone(),
+            axum::http::Method::POST,
+            "/v1/pool",
+            Some(&did_a),
+            Some(json!({
+                "name": "C39Test",
+                "vendor": "openai",
+                "monthly_cost_usd": 50.0,
+                "bnkr_goal": 10_000_000u64,
+                "initial_contribution": initial,
+            })),
+        ).await;
+        assert_eq!(s, StatusCode::CREATED);
+        let pool_id = pool_resp["pool_id"].as_str().unwrap().to_string();
+
+        // B joins the pool
+        top_up(&state, &did_b, 5_000_000).await;
+        let (s, _) = join_pool(&state, &did_b, &pool_id, 1_000_000).await;
+        assert_eq!(s, StatusCode::OK);
+
+        // A's FICO should report 1 pool membership
+        top_up(&state, &did_a, 5_000_000).await;
+        let (s, resp) = req(
+            state.clone(),
+            axum::http::Method::GET,
+            &format!("/v1/agent/{}/credit", did_a),
+            Some(&did_a),
+            None,
+        ).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(resp["pool_memberships"].as_u64().unwrap_or(99), 1,
+            "A should have 1 pool membership from initial contribution");
+
+        // B's FICO should report 1 pool membership
+        top_up(&state, &did_b, 5_000_000).await;
+        let (s, resp) = req(
+            state.clone(),
+            axum::http::Method::GET,
+            &format!("/v1/agent/{}/credit", did_b),
+            Some(&did_b),
+            None,
+        ).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(resp["pool_memberships"].as_u64().unwrap_or(99), 1,
+            "B should have 1 pool membership from join");
     }
 }

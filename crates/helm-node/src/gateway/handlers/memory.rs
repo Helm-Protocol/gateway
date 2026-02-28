@@ -102,9 +102,13 @@ pub async fn handle_memory_get(
         }
     }
 
-    // Charge a tiny read fee
+    // Charge a tiny read fee — deduct BEFORE recording (C30: billing bypass prevention)
     let read_cost = 100u64; // 0.0001 VIRTUAL
     drop(memory);
+    state.deduct_balance(&did, read_cost).await.map_err(|avail| (
+        StatusCode::PAYMENT_REQUIRED,
+        Json(json!({"error": "insufficient_balance", "required": read_cost, "available": avail})),
+    ))?;
     state.record_api_call(&did, "sense/memory/read", read_cost).await;
 
     let memory = state.memory.read().await;
@@ -199,10 +203,15 @@ pub async fn handle_memory_put(
         ttl_ms,
     };
 
-    state.memory.write().await.insert(internal_key, entry);
-
     // Write fee: 50_000 VIRTUAL micro-units = 0.05 VIRTUAL per write
+    // Deduct BEFORE writing (C30: billing bypass prevention)
     let write_cost = 50_000u64;
+    state.deduct_balance(&did, write_cost).await.map_err(|avail| (
+        StatusCode::PAYMENT_REQUIRED,
+        Json(json!({"error": "insufficient_balance", "required": write_cost, "available": avail,
+                    "message": "Need 0.05 VIRTUAL to write to Sense Memory."})),
+    ))?;
+    state.memory.write().await.insert(internal_key, entry);
     state.record_api_call(&did, "sense/memory/write", write_cost).await;
 
     Ok(Json(MemoryPutResponse {

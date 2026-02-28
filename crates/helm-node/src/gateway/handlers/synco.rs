@@ -171,6 +171,17 @@ pub async fn handle_synco(
 
     let original_bytes = raw_data.len();
 
+    // Pricing: $1.50/GB for encode ≈ 2,254 μV/MB.
+    // Pre-charge BEFORE processing (C31: billing bypass prevention).
+    let mb = (original_bytes as f64 / (1024.0 * 1024.0)).max(0.001);
+    let encode_rate_uv_per_mb = 2_254_u64;
+    let virtual_charged = (encode_rate_uv_per_mb as f64 * mb) as u64;
+    state.deduct_balance(&did, virtual_charged).await.map_err(|avail| (
+        StatusCode::PAYMENT_REQUIRED,
+        Json(json!({"error": "insufficient_balance", "required": virtual_charged, "available": avail,
+                    "message": "Insufficient VIRTUAL balance for Sync-O encoding."})),
+    ))?;
+
     let (output_b64, shard_count, has_parity, processed_bytes, compression_ratio, golomb_m) =
         match req.operation.as_str() {
             "encode" | "compress" => {
@@ -243,11 +254,7 @@ pub async fn handle_synco(
 
     let processing_ns = t_start.elapsed().as_nanos() as u64;
 
-    // Pricing: $1.50/GB for encode (v3.0 bidirectional model)
-    // $1.50/GB ÷ $0.65/VIRTUAL × 1,000,000 μV/VIRTUAL ÷ 1,024 MB/GB ≈ 2,254 μV/MB
-    let mb = (original_bytes as f64 / (1024.0 * 1024.0)).max(0.001);
-    let encode_rate_uv_per_mb = 2_254_u64; // ~$1.50/GB in VIRTUAL μ-units
-    let virtual_charged = (encode_rate_uv_per_mb as f64 * mb) as u64;
+    // virtual_charged was pre-computed and deducted above (C31)
     state.record_api_call(&did, "synco/stream", virtual_charged).await;
 
     tracing::debug!(
@@ -342,6 +349,17 @@ pub async fn handle_synco_decode(
         }))));
     }
 
+    // Pricing: $1.00/GB for decode ≈ 1,503 μV/MB.
+    // Pre-charge BEFORE processing (C31: billing bypass prevention).
+    let mb = (encoded_blob.len() as f64 / (1024.0 * 1024.0)).max(0.001);
+    let decode_rate_uv_per_mb = 1_503_u64;
+    let virtual_charged = (decode_rate_uv_per_mb as f64 * mb) as u64;
+    state.deduct_balance(&did, virtual_charged).await.map_err(|avail| (
+        StatusCode::PAYMENT_REQUIRED,
+        Json(json!({"error": "insufficient_balance", "required": virtual_charged, "available": avail,
+                    "message": "Insufficient VIRTUAL balance for Sync-O decoding."})),
+    ))?;
+
     use helm_engine::GrgPipeline;
     let grg_mode = match req.mode {
         SyncoMode::Turbo  => helm_engine::GrgMode::Turbo,
@@ -368,11 +386,7 @@ pub async fn handle_synco_decode(
     let output_b64 = base64::engine::general_purpose::STANDARD.encode(&recovered);
     let processing_ns = t_start.elapsed().as_nanos() as u64;
 
-    // Pricing: $1.00/GB for decode (v3.0)
-    // $1.00/GB ÷ $0.65/VIRTUAL × 1,000,000 μV/VIRTUAL ÷ 1,024 MB/GB ≈ 1,503 μV/MB
-    let mb = (encoded_blob.len() as f64 / (1024.0 * 1024.0)).max(0.001);
-    let decode_rate_uv_per_mb = 1_503_u64; // ~$1.00/GB
-    let virtual_charged = (decode_rate_uv_per_mb as f64 * mb) as u64;
+    // virtual_charged was pre-computed and deducted above (C31)
     state.record_api_call(&did, "synco/decode", virtual_charged).await;
 
     tracing::debug!(

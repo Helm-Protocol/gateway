@@ -104,21 +104,21 @@ pub async fn handle_create_pool(
     let pool_id = Uuid::new_v4().to_string();
     let now = now_ms();
 
-    // Validate initial contribution doesn't exceed goal and caller has sufficient balance
+    // C35: Atomic deduction — (initial_contribution + creation_fee) deducted in one call.
+    // This eliminates the TOCTOU race where check → pool insert → deduct had a race window.
+    // C34: Creation fee (5V) is now actually deducted from virtual_balance (not just recorded).
     let initial = req.initial_contribution.min(req.bnkr_goal);
-    if initial > 0 {
-        let agents = state.agents.read().await;
-        if let Some(agent) = agents.get(&did) {
-            if agent.virtual_balance < initial {
-                return Err((StatusCode::PAYMENT_REQUIRED, Json(json!({
-                    "error": "insufficient_balance",
-                    "required": initial,
-                    "available": agent.virtual_balance,
-                    "message": "Insufficient VIRTUAL balance for initial pool contribution"
-                }))));
-            }
-        }
-    }
+    let creation_fee = 5 * VIRTUAL_UNIT;
+    let total_needed = initial.saturating_add(creation_fee);
+    state.deduct_balance(&did, total_needed).await.map_err(|avail| (
+        StatusCode::PAYMENT_REQUIRED,
+        Json(json!({
+            "error": "insufficient_balance",
+            "required": total_needed,
+            "available": avail,
+            "message": "Need initial_contribution + 5 VIRTUAL creation fee."
+        })),
+    ))?;
 
     let mut members = Vec::new();
     if initial > 0 {
@@ -150,18 +150,19 @@ pub async fn handle_create_pool(
 
     state.pools.write().await.insert(pool_id.clone(), pool);
 
-    // Deduct initial contribution from caller's balance
+    // C39: Track pool membership on agent record for O(1) FICO pool scan.
     if initial > 0 {
         let mut agents = state.agents.write().await;
         if let Some(agent) = agents.get_mut(&did) {
-            agent.virtual_balance = agent.virtual_balance.saturating_sub(initial);
+            if !agent.pool_ids.contains(&pool_id) {
+                agent.pool_ids.push(pool_id.clone());
+            }
         }
     }
 
     let progress_pct = initial as f64 / req.bnkr_goal as f64 * 100.0;
 
-    // Charge pool creation fee: 5 VIRTUAL
-    let creation_fee = 5 * VIRTUAL_UNIT;
+    // Record API call for tracking (balance was already deducted atomically above)
     state.record_api_call(&did, "pool/create", creation_fee).await;
 
     // Sanitize vendor field before logging (log injection prevention)
@@ -281,6 +282,16 @@ pub async fn handle_join_pool(
             agent.virtual_balance = agent.virtual_balance.saturating_add(stake);
         }
         return Err(e);
+    }
+
+    // C39: Track pool membership on agent record for O(1) FICO pool scan.
+    {
+        let mut agents = state.agents.write().await;
+        if let Some(agent) = agents.get_mut(&did) {
+            if !agent.pool_ids.contains(&pool_id) {
+                agent.pool_ids.push(pool_id.clone());
+            }
+        }
     }
 
     let (total_collected, progress_pct) = {

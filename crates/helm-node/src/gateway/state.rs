@@ -65,6 +65,10 @@ pub struct AgentRecord {
     pub is_human_operator: bool,
     /// Subscribed package tier
     pub package_tier: PackageTier,
+    /// Pool IDs this agent is a member of (updated on join/create with initial stake).
+    /// Enables O(1) FICO pool membership count instead of O(pools × members) scan (C39).
+    #[serde(default)]
+    pub pool_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

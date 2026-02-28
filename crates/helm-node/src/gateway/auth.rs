@@ -165,7 +165,7 @@ pub async fn require_auth(
     if let Some(sig_header) = request.headers().get("x-helm-signature") {
         let sig_b64 = sig_header.to_str().unwrap_or("").to_string();
 
-        // Anti-replay: validate X-Helm-Timestamp if present (must be within ±30s)
+        // Anti-replay: validate X-Helm-Timestamp if present (must be within ±15s)
         // Protocol: sign sha256(timestamp_ms_str + ":" + body_bytes) when timestamp provided.
         // Without timestamp: old scheme (sha256(body) only) — accepted but replay-vulnerable.
         let timestamp_opt = request.headers()
@@ -183,7 +183,7 @@ pub async fn require_auth(
                     StatusCode::BAD_REQUEST,
                     Json(json!({
                         "error": "timestamp_in_future",
-                        "message": "X-Helm-Timestamp is more than 30s in the future. Check server clock skew.",
+                        "message": "X-Helm-Timestamp is more than 15s in the future. Check server clock skew.",
                     })),
                 ));
             }
@@ -192,7 +192,7 @@ pub async fn require_auth(
                     StatusCode::UNAUTHORIZED,
                     Json(json!({
                         "error": "signature_expired",
-                        "message": "X-Helm-Timestamp is older than 30s — possible replay attack.",
+                        "message": "X-Helm-Timestamp is older than 15s — possible replay attack.",
                         "hint": "Always include a fresh X-Helm-Timestamp with each signed request.",
                     })),
                 ));

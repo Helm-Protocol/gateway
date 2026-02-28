@@ -201,11 +201,8 @@ pub async fn handle_fico(
     };
 
     // 5. Pool score (0–100)
-    let pools = state.pools.read().await;
-    let pool_memberships = pools.values()
-        .filter(|p| p.members.iter().any(|m| m.did == did))
-        .count();
-    drop(pools);
+    // C39: O(1) lookup via agent.pool_ids — avoids O(pools × members) full scan on each FICO call.
+    let pool_memberships = agent.pool_ids.len();
 
     let pool_score = (pool_memberships as u32 * 33).min(100);
 

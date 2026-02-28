@@ -114,7 +114,7 @@ pub async fn handle_boot(
         }))));
     }
 
-    // Global boot rate limit (Sybil protection: max 120 new DIDs/minute)
+    // Global boot rate limit (Sybil protection: max 20 new DIDs/minute)
     if !state.check_and_record_global_boot().await {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
@@ -179,6 +179,7 @@ pub async fn handle_boot(
         is_elite: false,
         is_human_operator: false,
         package_tier: PackageTier::None,
+        pool_ids: Vec::new(),
     };
 
     // Check for duplicate (shouldn't happen with random keypair, but defensive)
