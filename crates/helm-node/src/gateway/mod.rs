@@ -34,6 +34,9 @@ pub mod pricing;
 pub mod server;
 pub mod state;
 
+#[cfg(test)]
+mod tests;
+
 use anyhow::Result;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
