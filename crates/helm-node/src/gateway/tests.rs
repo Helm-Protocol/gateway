@@ -206,6 +206,13 @@ mod gateway_tests {
         agents.get(did).map(|a| a.virtual_balance).unwrap_or(0)
     }
 
+    /// Clear global boot rate timestamps (simulates time elapsing past the 60s window).
+    /// Use in tests that need >GLOBAL_BOOT_RATE_MAX boots and are NOT testing the boot rate
+    /// itself (e.g. tests that focus on marketplace or pool behaviour with many agents).
+    async fn clear_boot_rate(state: &AppState) {
+        state.boot_timestamps.write().await.clear();
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Public endpoints
     // ─────────────────────────────────────────────────────────────────────────
@@ -266,8 +273,8 @@ mod gateway_tests {
             let credits = resp["welcome_credits"].as_u64().unwrap_or(0);
             (did, priv_key, credits)
         };
-        // WELCOME_CREDITS = 10 * VIRTUAL_UNIT = 10_000_000
-        assert_eq!(welcome_credits, 10_000_000, "Expected 10 VIRTUAL welcome credits");
+        // WELCOME_CREDITS = 5 * VIRTUAL_UNIT = 5_000_000 (reduced from 10V to lower Sybil farming ROI)
+        assert_eq!(welcome_credits, 5_000_000, "Expected 5 VIRTUAL welcome credits");
     }
 
     #[tokio::test]
@@ -452,11 +459,12 @@ mod gateway_tests {
 
     #[tokio::test]
     async fn test_attack_c6_rate_limit_100_ok_101_rejected() {
+        use crate::gateway::auth::RATE_LIMIT_MAX;
         let state = AppState::new();
         let (did, _) = boot(&state, None).await;
 
-        // First 100 requests must succeed
-        for i in 0..100 {
+        // First RATE_LIMIT_MAX requests must succeed
+        for i in 0..RATE_LIMIT_MAX {
             let (status, _) = req(
                 state.clone(),
                 Method::GET,
@@ -472,7 +480,7 @@ mod gateway_tests {
             );
         }
 
-        // 101st request must be rate-limited
+        // (RATE_LIMIT_MAX+1)th request must be rate-limited
         let (status, resp) = req(
             state,
             Method::GET,
@@ -1090,6 +1098,9 @@ mod gateway_tests {
         assert_eq!(resp["total"].as_u64().unwrap(), 2);
 
         // 10. FICO self-query
+        // Top up before FICO: cortex novelty premium (up to 4V) may have consumed the 5V
+        // welcome credits. This simulates a real user who has earned or purchased more credits.
+        top_up(&state, &did, 5_000_000).await; // add 5 VIRTUAL to ensure FICO succeeds
         let (s, resp) = req(
             state.clone(),
             Method::GET,
@@ -1283,13 +1294,21 @@ mod gateway_tests {
 
     #[tokio::test]
     async fn test_attack_m7_max_applications_per_post() {
+        use crate::gateway::handlers::marketplace::MAX_APPLICATIONS_PER_POST;
+        use crate::gateway::state::GLOBAL_BOOT_RATE_MAX;
         let state = AppState::new();
         let (creator, _) = boot(&state, None).await;
         let (_, post_resp) = create_post(&state, &creator, "Competition Post", "Apply now.").await;
         let post_id = post_resp["post_id"].as_str().unwrap().to_string();
 
-        // Apply with 100 different agents — all must succeed
-        for i in 0..100 {
+        // Apply with MAX_APPLICATIONS_PER_POST different agents — all must succeed.
+        // Agents are reset between boot-rate windows to simulate signups over time,
+        // since this test focuses on the application limit, not the Sybil boot limit.
+        for i in 0..MAX_APPLICATIONS_PER_POST {
+            // Simulate time passing every GLOBAL_BOOT_RATE_MAX boots
+            if i % GLOBAL_BOOT_RATE_MAX == 0 {
+                clear_boot_rate(&state).await;
+            }
             let (applicant, _) = boot(&state, None).await;
             let (s, resp) = apply_post(
                 &state,
@@ -1301,13 +1320,15 @@ mod gateway_tests {
             assert_eq!(s, StatusCode::OK, "Application #{i} should succeed: {resp}");
         }
 
-        // 101st applicant must be rejected
-        let (lateomer, _) = boot(&state, None).await;
-        let (s, resp) = apply_post(&state, &lateomer, &post_id, "I'm too late!").await;
+        // One more applicant beyond the limit must be rejected
+        clear_boot_rate(&state).await;
+        let (latecomer, _) = boot(&state, None).await;
+        let (s, resp) = apply_post(&state, &latecomer, &post_id, "I'm too late!").await;
         assert_eq!(
             s,
             StatusCode::CONFLICT,
-            "101st application must be rejected: {resp}"
+            "Application #{} must be rejected: {resp}",
+            MAX_APPLICATIONS_PER_POST + 1
         );
         assert_eq!(resp["error"], "post_application_limit_reached");
     }
@@ -1690,7 +1711,7 @@ mod gateway_tests {
         let (did, _) = boot(&state, None).await;
 
         let balance_before = get_balance(&state, &did).await;
-        assert_eq!(balance_before, 10 * VIRTUAL_UNIT, "Welcome credits must be 10 VIRTUAL");
+        assert_eq!(balance_before, 5 * VIRTUAL_UNIT, "Welcome credits must be 5 VIRTUAL");
 
         let (status, _) = req(
             state.clone(),
@@ -1791,11 +1812,16 @@ mod gateway_tests {
 
     #[tokio::test]
     async fn test_attack_c22_cortex_many_agents_no_crash() {
+        use crate::gateway::state::GLOBAL_BOOT_RATE_MAX;
         let state = AppState::new();
 
-        // Boot 20 agents and have each call cortex — verifies no panics or 500s
-        // under concurrent agent pressure (each has sufficient welcome credits)
-        for _ in 0..20 {
+        // Boot many agents and have each call cortex — verifies no panics or 500s.
+        // Agents boot in batches to stay within GLOBAL_BOOT_RATE_MAX per window.
+        let total = GLOBAL_BOOT_RATE_MAX * 2; // test pressure across 2 windows
+        for i in 0..total {
+            if i % GLOBAL_BOOT_RATE_MAX == 0 {
+                clear_boot_rate(&state).await; // simulate next 60s window
+            }
             let (did, _) = boot(&state, None).await;
             let (status, resp) = req(
                 state.clone(),
@@ -1807,7 +1833,7 @@ mod gateway_tests {
             .await;
             assert!(
                 status == StatusCode::OK || status == StatusCode::PAYMENT_REQUIRED,
-                "Cortex must not crash under many-agent load, got {status}: {resp}"
+                "Cortex must not crash under many-agent load (agent {i}/{total}), got {status}: {resp}"
             );
         }
     }

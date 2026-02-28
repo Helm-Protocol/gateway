@@ -48,7 +48,8 @@ pub struct CreatePostResponse {
 const MAX_TITLE_LEN: usize = 200;
 const MAX_DESCRIPTION_LEN: usize = 4096;
 const MAX_PROPOSAL_LEN: usize = 2048;
-const MAX_APPLICATIONS_PER_POST: usize = 100;
+/// 50 applications per post: enough competition, but limits Sybil-flooding a post.
+pub const MAX_APPLICATIONS_PER_POST: usize = 50;
 
 pub async fn handle_create_post(
     State(state): State<AppState>,

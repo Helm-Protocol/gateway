@@ -10,24 +10,28 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Maximum number of API call records to retain (FIFO: oldest dropped first).
-/// Reduced from 1M: 1M × ~200 bytes = 200 MB heap pressure, and earnings scans are O(n).
-const MAX_API_CALLS_LOG: usize = 100_000;
+/// 10K × ~200 bytes = 2 MB heap. Reduced from 100K for leaner O(n) earnings scans.
+const MAX_API_CALLS_LOG: usize = 10_000;
 
 /// Maximum number of per-DID attention engine cache entries.
 /// Each HelmAttentionEngine(256) ≈ 256 × 64 × 8 bytes × 2 = 262 KB.
-/// 10K entries ≈ 2.6 GB max; evict oldest (random) when cap hit.
-pub const MAX_ATTENTION_CACHE_ENTRIES: usize = 10_000;
+/// 1K entries ≈ 262 MB max; evict oldest (random) when cap hit.
+/// Reduced from 10K (2.6 GB) to prevent OOM under Sybil load.
+pub const MAX_ATTENTION_CACHE_ENTRIES: usize = 1_000;
 
 /// Maximum number of per-DID Socratic Claw instances.
-pub const MAX_CLAW_CACHE_ENTRIES: usize = 10_000;
+/// Reduced from 10K to 1K to match attention cache bound.
+pub const MAX_CLAW_CACHE_ENTRIES: usize = 1_000;
 
 /// Global boot rate limit: max new DIDs per minute across all IPs.
 /// Sybil protection — stops airdrop farming and referral tree pumping.
-pub const GLOBAL_BOOT_RATE_MAX: usize = 120; // 2 per second
+/// 20/min = ~1 per 3 seconds; sufficient for legitimate signups, hostile to Sybil armies.
+pub const GLOBAL_BOOT_RATE_MAX: usize = 20;
 pub const GLOBAL_BOOT_WINDOW_MS: u64 = 60_000;
 
 /// Maximum marketplace posts per DID (spam protection).
-pub const MAX_POSTS_PER_DID: usize = 50;
+/// Reduced from 50 to 20: realistic power users have ≤5 active posts.
+pub const MAX_POSTS_PER_DID: usize = 20;
 
 use helm_engine::{BillingLedger, HelmAttentionEngine, GrgPipeline, GrgMode};
 use helm_agent::socratic::claw::SocraticClaw;

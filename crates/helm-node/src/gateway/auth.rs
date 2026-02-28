@@ -14,7 +14,7 @@
 //!
 //! ## Rate Limiting
 //!
-//! Sliding window: ≤100 calls per 60 seconds per DID.
+//! Sliding window: ≤30 calls per 60 seconds per DID.
 //! Tracked in AppState::rate_limits (DID → Vec<timestamp_ms>).
 
 use axum::{
@@ -32,7 +32,9 @@ use crate::gateway::state::{AppState, now_ms};
 #[derive(Debug, Clone)]
 pub struct CallerDid(pub String);
 
-const RATE_LIMIT_MAX: usize = 100;
+/// Per-DID request rate limit. 30/min: normal agents use 5-10 req/min;
+/// 30 is generous for legitimate use while making automated scanning expensive.
+pub const RATE_LIMIT_MAX: usize = 30;
 const RATE_LIMIT_WINDOW_MS: u64 = 60_000; // 60 seconds
 
 pub fn extract_did_from_headers(headers: &HeaderMap) -> Option<String> {
@@ -173,7 +175,9 @@ pub async fn require_auth(
 
         if let Some(ts_ms) = timestamp_opt {
             let now = now_ms();
-            const TIMESTAMP_TOLERANCE_MS: u64 = 30_000; // 30 seconds
+            // 15s tolerance: enough for network latency while closing the replay window.
+            // AWS SigV4 uses 5min for compatibility; we're stricter (DeFi speed matters).
+            const TIMESTAMP_TOLERANCE_MS: u64 = 15_000; // 15 seconds
             if ts_ms > now + TIMESTAMP_TOLERANCE_MS {
                 return Err((
                     StatusCode::BAD_REQUEST,
