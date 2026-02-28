@@ -195,7 +195,7 @@ pub async fn handle_cortex(
 ) -> Result<Json<CortexResponse>, (StatusCode, Json<serde_json::Value>)> {
     let t_start = std::time::Instant::now();
 
-    // Validate input sizes
+    // Validate input sizes (before charging — don't charge for invalid requests)
     if req.knowledge_context.len() > MAX_CONTEXT_ITEMS {
         return Err((StatusCode::BAD_REQUEST, Json(json!({
             "error": "too_many_context_items",
@@ -227,8 +227,31 @@ pub async fn handle_cortex(
         _ => {}
     }
 
+    // Pre-charge base fee BEFORE expensive computation (prevents free oracle abuse).
+    // If balance is insufficient, fail fast without wasting compute.
+    let base_price = 2 * VIRTUAL_UNIT;
+    state.deduct_balance(&did, base_price).await.map_err(|avail| (
+        StatusCode::PAYMENT_REQUIRED,
+        Json(json!({
+            "error": "insufficient_balance",
+            "required": base_price,
+            "available": avail,
+            "message": "Need at least 2 VIRTUAL to use Sense Cortex. Top up your balance."
+        })),
+    ))?;
+
     // Get or create QKV-G attention engine for this DID
+    // Evict oldest entry when cache is at capacity (OOM protection: C22)
     let mut attention_cache = state.attention_cache.write().await;
+    if attention_cache.len() >= crate::gateway::state::MAX_ATTENTION_CACHE_ENTRIES
+        && !attention_cache.contains_key(&did)
+    {
+        // Evict an arbitrary entry (first key by HashMap iteration)
+        if let Some(evict_key) = attention_cache.keys().next().cloned() {
+            attention_cache.remove(&evict_key);
+            tracing::debug!("Evicted attention cache entry: {}", evict_key);
+        }
+    }
     let (engine, seq_idx) = attention_cache
         .entry(did.clone())
         .or_insert_with(|| {
@@ -266,8 +289,16 @@ pub async fn handle_cortex(
     };
 
     // Run Socratic Claw interceptor
+    // Evict oldest claw entry when at capacity (C23 OOM protection)
     let effective_halt_id = {
         let mut claws = state.claws.write().await;
+        if claws.len() >= crate::gateway::state::MAX_CLAW_CACHE_ENTRIES
+            && !claws.contains_key(&did)
+        {
+            if let Some(evict_key) = claws.keys().next().cloned() {
+                claws.remove(&evict_key);
+            }
+        }
         let claw = claws.entry(did.clone())
             .or_insert_with(|| SocraticClaw::new(64, 8));
         let decision = claw.intercept(g_score, &query_vec, &did);
@@ -325,12 +356,19 @@ pub async fn handle_cortex(
         }.to_string()
     }).collect();
 
-    // Calculate price with novelty premium
-    let base_price = 2 * VIRTUAL_UNIT; // 2 VIRTUAL base
+    // Calculate total price with novelty premium.
+    // base_price was already pre-charged before computation.
+    // Charge the novelty premium as additional deduction.
     let multiplier = g_metric_price_multiplier(g_score);
     let virtual_charged = (base_price as f64 * multiplier) as u64;
+    let novelty_premium = virtual_charged.saturating_sub(base_price);
+    if novelty_premium > 0 {
+        // Best-effort: if agent ran out (spent everything between pre-charge and now), allow it
+        // Agents accept this risk when they send requests with low balance.
+        let _ = state.deduct_balance(&did, novelty_premium).await;
+    }
 
-    // Record the call
+    // Record the call for tracking (billing ledger, referral graph, api_call_count)
     state.record_api_call(&did, "sense/cortex", virtual_charged).await;
 
     let processing_ns = t_start.elapsed().as_nanos() as u64;

@@ -113,6 +113,18 @@ pub async fn handle_boot(
         }))));
     }
 
+    // Global boot rate limit (Sybil protection: max 120 new DIDs/minute)
+    if !state.check_and_record_global_boot().await {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({
+                "error": "global_boot_rate_limit",
+                "message": "Too many new agent registrations. Try again in 60 seconds.",
+                "retry_after_ms": 60_000u64,
+            })),
+        ));
+    }
+
     // Validate referrer exists (if provided)
     if let Some(ref ref_did) = req.referrer_did {
         let agents = state.agents.read().await;
@@ -193,7 +205,12 @@ pub async fn handle_boot(
     let ts = now_ms();
     state.billing.write().await.charge_did_registration(&did, ts);
 
-    tracing::info!("AgentBoot: new DID {} (referrer: {:?})", did, req.referrer_did);
+    // Sanitize user inputs before logging (log injection prevention)
+    let safe_capability = req.capability.replace(['\r', '\n', '\0'], "_");
+    let safe_github = req.github_login.as_deref().unwrap_or("none").replace(['\r', '\n', '\0'], "_");
+    tracing::info!("AgentBoot: new DID {} capability={} github={} referrer={}",
+        did, safe_capability, safe_github,
+        req.referrer_did.as_deref().unwrap_or("none"));
 
     Ok((
         StatusCode::CREATED,

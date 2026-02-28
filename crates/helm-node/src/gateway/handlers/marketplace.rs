@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::gateway::auth::CallerDid;
 use crate::gateway::state::{
-    AppState, Application, MarketplacePost, PostStatus, PostType, now_ms,
+    AppState, Application, MarketplacePost, PostStatus, PostType, now_ms, MAX_POSTS_PER_DID,
 };
 
 // ── Create Post ─────────────────────────────────────────────────────────────
@@ -55,6 +55,20 @@ pub async fn handle_create_post(
     Extension(CallerDid(did)): Extension<CallerDid>,
     Json(req): Json<CreatePostRequest>,
 ) -> Result<(StatusCode, Json<CreatePostResponse>), (StatusCode, Json<serde_json::Value>)> {
+    // Enforce per-DID post limit (spam/flooding protection: C25)
+    {
+        let posts = state.posts.read().await;
+        let did_post_count = posts.values().filter(|p| p.creator_did == did).count();
+        if did_post_count >= MAX_POSTS_PER_DID {
+            return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({
+                "error": "post_limit_reached",
+                "current": did_post_count,
+                "max": MAX_POSTS_PER_DID,
+                "hint": "Delete closed posts to make room."
+            }))));
+        }
+    }
+
     if req.title.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "title_required"}))));
     }

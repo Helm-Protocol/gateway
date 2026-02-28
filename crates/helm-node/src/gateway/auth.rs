@@ -52,56 +52,65 @@ pub fn extract_did_from_headers(headers: &HeaderMap) -> Option<String> {
     }
 }
 
-/// Verify an ed25519 signature over the request body.
-///
+/// Verify an ed25519 signature over the request body (legacy: no timestamp).
 /// Header format: `X-Helm-Signature: <base64(ed25519_sig_over_sha256(body))>`
-/// The public key is the base58-encoded part of the DID: `did:helm:<pubkey_b58>`.
-fn verify_signature(
+fn verify_signature(did: &str, sig_b64: &str, body: &[u8]) -> bool {
+    use sha2::{Digest, Sha256};
+    let body_hash = Sha256::digest(body);
+    _verify_signature_raw(did, sig_b64, &body_hash)
+}
+
+/// Verify signature with timestamp anti-replay.
+/// Signs sha256(timestamp_ms_as_string + ":" + body).
+fn verify_signature_with_timestamp(
     did: &str,
     sig_b64: &str,
+    timestamp_ms: u64,
     body: &[u8],
 ) -> bool {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(timestamp_ms.to_string().as_bytes());
+    hasher.update(b":");
+    hasher.update(body);
+    let payload_hash = hasher.finalize();
+    // Reuse verify_signature by passing the combined hash as "body"
+    // (verify_signature hashes body again, so pass raw hash as input)
+    _verify_signature_raw(did, sig_b64, &payload_hash)
+}
+
+/// Raw signature verification over pre-computed bytes (no additional hashing).
+fn _verify_signature_raw(did: &str, sig_b64: &str, message: &[u8]) -> bool {
     use base64::Engine;
     use ed25519_dalek::{Signature, VerifyingKey};
-    use sha2::{Digest, Sha256};
 
-    // Extract public key from DID: "did:helm:<base58_pubkey>"
     let pubkey_b58 = match did.strip_prefix("did:helm:") {
         Some(pk) => pk,
         None => return false,
     };
-
     let pubkey_bytes = match bs58::decode(pubkey_b58).into_vec() {
         Ok(b) => b,
         Err(_) => return false,
     };
-
     let pubkey_arr: [u8; 32] = match pubkey_bytes.try_into() {
         Ok(a) => a,
         Err(_) => return false,
     };
-
     let verifying_key = match VerifyingKey::from_bytes(&pubkey_arr) {
         Ok(k) => k,
         Err(_) => return false,
     };
-
     let sig_bytes = match base64::engine::general_purpose::STANDARD.decode(sig_b64) {
         Ok(b) => b,
         Err(_) => return false,
     };
-
     let sig_arr: [u8; 64] = match sig_bytes.try_into() {
         Ok(a) => a,
         Err(_) => return false,
     };
-
     let signature = Signature::from_bytes(&sig_arr);
-
-    // Verify signature over sha256(body)
-    let body_hash = Sha256::digest(body);
     use ed25519_dalek::Verifier;
-    verifying_key.verify(&body_hash, &signature).is_ok()
+    verifying_key.verify(message, &signature).is_ok()
 }
 
 /// Auth middleware: validates caller DID exists in agent registry.
@@ -154,6 +163,43 @@ pub async fn require_auth(
     if let Some(sig_header) = request.headers().get("x-helm-signature") {
         let sig_b64 = sig_header.to_str().unwrap_or("").to_string();
 
+        // Anti-replay: validate X-Helm-Timestamp if present (must be within ±30s)
+        // Protocol: sign sha256(timestamp_ms_str + ":" + body_bytes) when timestamp provided.
+        // Without timestamp: old scheme (sha256(body) only) — accepted but replay-vulnerable.
+        let timestamp_opt = request.headers()
+            .get("x-helm-timestamp")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok());
+
+        if let Some(ts_ms) = timestamp_opt {
+            let now = now_ms();
+            const TIMESTAMP_TOLERANCE_MS: u64 = 30_000; // 30 seconds
+            if ts_ms > now + TIMESTAMP_TOLERANCE_MS {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": "timestamp_in_future",
+                        "message": "X-Helm-Timestamp is more than 30s in the future. Check server clock skew.",
+                    })),
+                ));
+            }
+            if now.saturating_sub(ts_ms) > TIMESTAMP_TOLERANCE_MS {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({
+                        "error": "signature_expired",
+                        "message": "X-Helm-Timestamp is older than 30s — possible replay attack.",
+                        "hint": "Always include a fresh X-Helm-Timestamp with each signed request.",
+                    })),
+                ));
+            }
+        } else if is_write {
+            tracing::warn!(
+                "Signed write without X-Helm-Timestamp: did={} — replay attacks possible",
+                did
+            );
+        }
+
         // Buffer request body for signature verification
         let (parts, body) = request.into_parts();
         let body_bytes = match axum::body::to_bytes(body, 10 * 1024 * 1024).await {
@@ -164,13 +210,23 @@ pub async fn require_auth(
             )),
         };
 
-        if !verify_signature(&did, &sig_b64, &body_bytes) {
+        // Verify signature: new protocol includes timestamp in signed payload
+        let sig_ok = if let Some(ts_ms) = timestamp_opt {
+            // New: sign sha256(timestamp_ms_string + ":" + body)
+            verify_signature_with_timestamp(&did, &sig_b64, ts_ms, &body_bytes)
+        } else {
+            // Legacy: sign sha256(body) only
+            verify_signature(&did, &sig_b64, &body_bytes)
+        };
+
+        if !sig_ok {
             return Err((
                 StatusCode::UNAUTHORIZED,
                 Json(json!({
                     "error": "invalid_signature",
-                    "message": "X-Helm-Signature verification failed. Sign sha256(body) with your ed25519 private key.",
+                    "message": "X-Helm-Signature verification failed. Sign sha256(timestamp+\":\"+body) with your ed25519 private key.",
                     "did": did,
+                    "hint": "Include X-Helm-Timestamp header for anti-replay protection.",
                 })),
             ));
         }

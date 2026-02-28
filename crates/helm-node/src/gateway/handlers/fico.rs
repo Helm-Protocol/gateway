@@ -116,6 +116,29 @@ pub async fn handle_fico(
 ) -> Result<Json<FicoResponse>, (StatusCode, Json<serde_json::Value>)> {
     let is_self_query = caller_did == did;
 
+    // Verify target DID exists BEFORE charging (don't charge for 404)
+    {
+        let agents = state.agents.read().await;
+        if !agents.contains_key(&did) {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "agent_not_found", "did": did})),
+            ));
+        }
+    }
+
+    // Pre-charge 2 VIRTUAL credit bureau query fee
+    let virtual_charged = 2 * VIRTUAL_UNIT;
+    state.deduct_balance(&caller_did, virtual_charged).await.map_err(|avail| (
+        StatusCode::PAYMENT_REQUIRED,
+        Json(json!({
+            "error": "insufficient_balance",
+            "required": virtual_charged,
+            "available": avail,
+            "message": "Need at least 2 VIRTUAL to query FICO credit score."
+        })),
+    ))?;
+
     let agents = state.agents.read().await;
     let agent = agents.get(&did).ok_or_else(|| (
         StatusCode::NOT_FOUND,
@@ -232,8 +255,7 @@ pub async fn handle_fico(
 
     drop(agents);
 
-    // Charge 2 VIRTUAL for the query
-    let virtual_charged = 2 * VIRTUAL_UNIT;
+    // Record the call for tracking (balance was already deducted via pre-charge above)
     state.record_api_call(&caller_did, "agent/credit", virtual_charged).await;
 
     // Non-self queries receive a redacted response:

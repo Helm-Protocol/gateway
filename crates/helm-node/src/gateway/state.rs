@@ -9,8 +9,25 @@ use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Maximum number of API call records to retain (LRU: oldest dropped first).
-const MAX_API_CALLS_LOG: usize = 1_000_000;
+/// Maximum number of API call records to retain (FIFO: oldest dropped first).
+/// Reduced from 1M: 1M × ~200 bytes = 200 MB heap pressure, and earnings scans are O(n).
+const MAX_API_CALLS_LOG: usize = 100_000;
+
+/// Maximum number of per-DID attention engine cache entries.
+/// Each HelmAttentionEngine(256) ≈ 256 × 64 × 8 bytes × 2 = 262 KB.
+/// 10K entries ≈ 2.6 GB max; evict oldest (random) when cap hit.
+pub const MAX_ATTENTION_CACHE_ENTRIES: usize = 10_000;
+
+/// Maximum number of per-DID Socratic Claw instances.
+pub const MAX_CLAW_CACHE_ENTRIES: usize = 10_000;
+
+/// Global boot rate limit: max new DIDs per minute across all IPs.
+/// Sybil protection — stops airdrop farming and referral tree pumping.
+pub const GLOBAL_BOOT_RATE_MAX: usize = 120; // 2 per second
+pub const GLOBAL_BOOT_WINDOW_MS: u64 = 60_000;
+
+/// Maximum marketplace posts per DID (spam protection).
+pub const MAX_POSTS_PER_DID: usize = 50;
 
 use helm_engine::{BillingLedger, HelmAttentionEngine, GrgPipeline, GrgMode};
 use helm_agent::socratic::claw::SocraticClaw;
@@ -270,6 +287,9 @@ pub struct AppState {
     /// Rate limit tracking: DID → Vec<call_timestamp_ms> (sliding window)
     pub rate_limits: Arc<RwLock<HashMap<String, Vec<u64>>>>,
 
+    /// Global boot rate: Vec<boot_timestamp_ms> for Sybil protection
+    pub boot_timestamps: Arc<RwLock<Vec<u64>>>,
+
     /// Gateway start timestamp
     pub started_at_ms: u64,
 }
@@ -303,8 +323,45 @@ impl AppState {
             grg: GrgPipeline::new(GrgMode::Safety),
             api_calls: Arc::new(RwLock::new(Vec::new())),
             rate_limits: Arc::new(RwLock::new(HashMap::new())),
+            boot_timestamps: Arc::new(RwLock::new(Vec::new())),
             started_at_ms: now_ms(),
         }
+    }
+
+    /// Atomically check and deduct VIRTUAL balance from an agent.
+    ///
+    /// Returns `Ok(new_balance)` if the agent has sufficient balance.
+    /// Returns `Err(current_balance)` if insufficient.
+    pub async fn deduct_balance(&self, caller_did: &str, amount: u64) -> Result<u64, u64> {
+        if amount == 0 {
+            let agents = self.agents.read().await;
+            let balance = agents.get(caller_did).map(|a| a.virtual_balance).unwrap_or(0);
+            return Ok(balance);
+        }
+        let mut agents = self.agents.write().await;
+        match agents.get_mut(caller_did) {
+            Some(agent) if agent.virtual_balance >= amount => {
+                agent.virtual_balance -= amount;
+                Ok(agent.virtual_balance)
+            }
+            Some(agent) => Err(agent.virtual_balance),
+            None => Err(0),
+        }
+    }
+
+    /// Check whether the global boot rate limit allows another boot.
+    /// Returns true if a new boot is permitted, false if the limit is hit.
+    /// Also records the new boot timestamp if permitted.
+    pub async fn check_and_record_global_boot(&self) -> bool {
+        let mut ts = self.boot_timestamps.write().await;
+        let now = now_ms();
+        let window_start = now.saturating_sub(GLOBAL_BOOT_WINDOW_MS);
+        ts.retain(|&t| t > window_start);
+        if ts.len() >= GLOBAL_BOOT_RATE_MAX {
+            return false;
+        }
+        ts.push(now);
+        true
     }
 
     /// Record an API call with referral tracking.

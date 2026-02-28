@@ -88,6 +88,24 @@ pub fn build_router(state: AppState) -> Router {
         HeaderValue::from_static("DENY"),
     );
 
+    // HSTS: tell clients to only use HTTPS for 1 year (effective behind TLS terminator)
+    let hsts = SetResponseHeaderLayer::if_not_present(
+        HeaderName::from_static("strict-transport-security"),
+        HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+    );
+
+    // Prevent browsers from caching sensitive API responses
+    let no_cache = SetResponseHeaderLayer::if_not_present(
+        HeaderName::from_static("cache-control"),
+        HeaderValue::from_static("no-store"),
+    );
+
+    // Disable MIME sniffing for the entire response body
+    let referrer_policy = SetResponseHeaderLayer::if_not_present(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
+
     // Authenticated routes (require DID Bearer token)
     let authed = Router::new()
         // Sense lines
@@ -130,6 +148,9 @@ pub fn build_router(state: AppState) -> Router {
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(nosniff)
         .layer(xframe)
+        .layer(hsts)
+        .layer(no_cache)
+        .layer(referrer_policy)
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -156,6 +177,7 @@ fn build_cors_layer() -> CorsLayer {
         HN::from_static("authorization"),
         HN::from_static("content-type"),
         HN::from_static("x-helm-signature"),
+        HN::from_static("x-helm-timestamp"),
     ];
 
     match std::env::var("HELM_CORS_ORIGINS") {

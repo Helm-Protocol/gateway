@@ -184,6 +184,28 @@ mod gateway_tests {
         .await
     }
 
+    /// Directly add VIRTUAL credits to an agent's balance (bypasses HTTP — test setup only).
+    async fn top_up(state: &AppState, did: &str, amount: u64) {
+        let mut agents = state.agents.write().await;
+        if let Some(agent) = agents.get_mut(did) {
+            agent.virtual_balance = agent.virtual_balance.saturating_add(amount);
+        }
+    }
+
+    /// Set an agent's balance to zero (test helper — simulates exhausted credits).
+    async fn drain_balance(state: &AppState, did: &str) {
+        let mut agents = state.agents.write().await;
+        if let Some(agent) = agents.get_mut(did) {
+            agent.virtual_balance = 0;
+        }
+    }
+
+    /// Read an agent's current virtual balance directly from state.
+    async fn get_balance(state: &AppState, did: &str) -> u64 {
+        let agents = state.agents.read().await;
+        agents.get(did).map(|a| a.virtual_balance).unwrap_or(0)
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Public endpoints
     // ─────────────────────────────────────────────────────────────────────────
@@ -1397,5 +1419,481 @@ mod gateway_tests {
             .await;
             assert_eq!(status, StatusCode::CREATED, "Token '{token}' should be valid");
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Attack C9: Sybil / Global boot rate limit
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_attack_c9_global_boot_rate_limit() {
+        use crate::gateway::state::{GLOBAL_BOOT_RATE_MAX, now_ms};
+        let state = AppState::new();
+
+        // Pre-fill boot_timestamps to the rate limit ceiling
+        {
+            let mut ts = state.boot_timestamps.write().await;
+            let now = now_ms();
+            for _ in 0..GLOBAL_BOOT_RATE_MAX {
+                ts.push(now);
+            }
+        }
+
+        // The very next boot must be rate-limited
+        let (status, resp) = req(
+            state,
+            Method::POST,
+            "/v1/agent/boot",
+            None,
+            Some(json!({"capability": "compute", "preferred_token": "VIRTUAL"})),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::TOO_MANY_REQUESTS,
+            "Boot must be blocked when global rate limit is hit: {resp}"
+        );
+        assert_eq!(resp["error"], "global_boot_rate_limit");
+    }
+
+    #[tokio::test]
+    async fn test_attack_c9_boot_rate_window_resets_after_expiry() {
+        use crate::gateway::state::{GLOBAL_BOOT_RATE_MAX, GLOBAL_BOOT_WINDOW_MS, now_ms};
+        let state = AppState::new();
+
+        // Fill with old timestamps (outside the 60s window)
+        {
+            let mut ts = state.boot_timestamps.write().await;
+            let old = now_ms().saturating_sub(GLOBAL_BOOT_WINDOW_MS + 1_000);
+            for _ in 0..GLOBAL_BOOT_RATE_MAX {
+                ts.push(old);
+            }
+        }
+
+        // Boot should succeed since all existing timestamps are expired
+        let (status, _) = req(
+            state,
+            Method::POST,
+            "/v1/agent/boot",
+            None,
+            Some(json!({"preferred_token": "VIRTUAL"})),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "Boot must succeed after rate limit window resets"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Attack C11: Signature anti-replay (X-Helm-Timestamp)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_attack_c11_stale_timestamp_rejected() {
+        use crate::gateway::state::now_ms;
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+
+        // Craft a request with a stale timestamp (31 seconds in the past)
+        let stale_ts = now_ms().saturating_sub(31_000);
+        let app = build_router(state);
+        let request = Request::builder()
+            .method(Method::PUT)
+            .uri("/v1/sense/memory/testkey")
+            .header("authorization", format!("Bearer {}", did))
+            .header("x-helm-signature", "dGhpcyBpcyBub3QgYSB2YWxpZCBzaWduYXR1cmU=")
+            .header("x-helm-timestamp", stale_ts.to_string())
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"value": "replay"}"#))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "Stale timestamp (>30s old) must be rejected as replay"
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        assert_eq!(body["error"], "signature_expired");
+    }
+
+    #[tokio::test]
+    async fn test_attack_c11_future_timestamp_rejected() {
+        use crate::gateway::state::now_ms;
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+
+        // Craft a request with a timestamp 31 seconds in the future (clock skew attack)
+        let future_ts = now_ms() + 31_000;
+        let app = build_router(state);
+        let request = Request::builder()
+            .method(Method::PUT)
+            .uri("/v1/sense/memory/testkey")
+            .header("authorization", format!("Bearer {}", did))
+            .header("x-helm-signature", "dGhpcyBpcyBub3QgYSB2YWxpZCBzaWduYXR1cmU=")
+            .header("x-helm-timestamp", future_ts.to_string())
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"value": "timewarp"}"#))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "Future timestamp (>30s ahead) must be rejected"
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        assert_eq!(body["error"], "timestamp_in_future");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Attack C19: Balance deduction enforcement (critical billing bug fix)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_attack_c19_cortex_zero_balance_rejected() {
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+
+        // Drain all credits
+        drain_balance(&state, &did).await;
+
+        let (status, resp) = req(
+            state,
+            Method::POST,
+            "/v1/sense/cortex",
+            Some(&did),
+            Some(json!({"query": "test query"})),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::PAYMENT_REQUIRED,
+            "Cortex with 0 balance must fail: {resp}"
+        );
+        assert_eq!(resp["error"], "insufficient_balance");
+    }
+
+    #[tokio::test]
+    async fn test_attack_c19_cortex_partial_balance_rejected() {
+        use crate::gateway::pricing::VIRTUAL_UNIT;
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+
+        // Set balance to exactly 1 VIRTUAL (need 2 VIRTUAL minimum for cortex)
+        drain_balance(&state, &did).await;
+        top_up(&state, &did, VIRTUAL_UNIT).await; // 1 VIRTUAL
+
+        let (status, resp) = req(
+            state,
+            Method::POST,
+            "/v1/sense/cortex",
+            Some(&did),
+            Some(json!({"query": "test"})),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::PAYMENT_REQUIRED,
+            "Cortex with 1 VIRTUAL (need 2) must fail: {resp}"
+        );
+        assert_eq!(resp["error"], "insufficient_balance");
+    }
+
+    #[tokio::test]
+    async fn test_attack_c19_cortex_exact_balance_succeeds() {
+        use crate::gateway::pricing::VIRTUAL_UNIT;
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+
+        // Set balance to exactly 2 VIRTUAL (minimum for cortex)
+        drain_balance(&state, &did).await;
+        top_up(&state, &did, 2 * VIRTUAL_UNIT).await;
+
+        let (status, _resp) = req(
+            state,
+            Method::POST,
+            "/v1/sense/cortex",
+            Some(&did),
+            Some(json!({"query": "test"})),
+        )
+        .await;
+        // Should succeed (2 VIRTUAL exactly meets the base charge)
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "Cortex with exactly 2 VIRTUAL must succeed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_attack_c19_fico_zero_balance_rejected() {
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+        drain_balance(&state, &did).await;
+
+        let (status, resp) = req(
+            state,
+            Method::GET,
+            &format!("/v1/agent/{}/credit", did),
+            Some(&did),
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::PAYMENT_REQUIRED,
+            "FICO with 0 balance must fail: {resp}"
+        );
+        assert_eq!(resp["error"], "insufficient_balance");
+    }
+
+    #[tokio::test]
+    async fn test_attack_c19_fico_no_charge_on_404() {
+        let state = AppState::new();
+        let (caller, _) = boot(&state, None).await;
+
+        // Record balance before querying a nonexistent DID
+        let balance_before = get_balance(&state, &caller).await;
+
+        let (status, resp) = req(
+            state.clone(),
+            Method::GET,
+            "/v1/agent/did:helm:nonexistent999/credit",
+            Some(&caller),
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "Nonexistent DID FICO must 404: {resp}"
+        );
+
+        // Caller must NOT be charged for a 404 (DID check happens before billing)
+        let balance_after = get_balance(&state, &caller).await;
+        assert_eq!(
+            balance_before,
+            balance_after,
+            "Caller balance must be unchanged on 404 FICO query (was: {balance_before}, now: {balance_after})"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_attack_c19_balance_deducted_after_cortex() {
+        use crate::gateway::pricing::VIRTUAL_UNIT;
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+
+        let balance_before = get_balance(&state, &did).await;
+        assert_eq!(balance_before, 10 * VIRTUAL_UNIT, "Welcome credits must be 10 VIRTUAL");
+
+        let (status, _) = req(
+            state.clone(),
+            Method::POST,
+            "/v1/sense/cortex",
+            Some(&did),
+            Some(json!({"query": "deduction test"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "Cortex must succeed");
+
+        let balance_after = get_balance(&state, &did).await;
+        // Balance must decrease by at least base_price (2 VIRTUAL)
+        assert!(
+            balance_after < balance_before,
+            "Balance must decrease after cortex call (before: {balance_before}, after: {balance_after})"
+        );
+        assert!(
+            balance_before - balance_after >= 2 * VIRTUAL_UNIT,
+            "At least 2 VIRTUAL must be deducted (before: {balance_before}, after: {balance_after})"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_attack_c19_balance_deducted_after_fico() {
+        use crate::gateway::pricing::VIRTUAL_UNIT;
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+
+        let balance_before = get_balance(&state, &did).await;
+
+        let (status, _) = req(
+            state.clone(),
+            Method::GET,
+            &format!("/v1/agent/{}/credit", did),
+            Some(&did),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "FICO must succeed");
+
+        let balance_after = get_balance(&state, &did).await;
+        assert!(
+            balance_after < balance_before,
+            "Balance must decrease after FICO call (before: {balance_before}, after: {balance_after})"
+        );
+        assert_eq!(
+            balance_before - balance_after,
+            2 * VIRTUAL_UNIT,
+            "Exactly 2 VIRTUAL must be deducted for FICO query"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Attack C25: Marketplace post flooding (per-DID post limit)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_attack_c25_marketplace_post_limit() {
+        use crate::gateway::state::MAX_POSTS_PER_DID;
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+
+        // Create exactly MAX_POSTS_PER_DID posts — all must succeed
+        for i in 0..MAX_POSTS_PER_DID {
+            let (status, resp) = create_post(
+                &state,
+                &did,
+                &format!("Post Title {}", i),
+                "Post description.",
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::CREATED,
+                "Post {i}/{MAX_POSTS_PER_DID} must succeed: {resp}"
+            );
+        }
+
+        // One more post must be rejected
+        let (status, resp) = create_post(&state, &did, "Over The Limit", "Too many posts.").await;
+        assert_eq!(
+            status,
+            StatusCode::TOO_MANY_REQUESTS,
+            "Post #{MAX_POSTS_PER_DID} + 1 must be rejected: {resp}"
+        );
+        assert_eq!(resp["error"], "post_limit_reached");
+        assert_eq!(
+            resp["max"].as_u64().unwrap_or(0),
+            MAX_POSTS_PER_DID as u64,
+            "Error response must include the correct limit"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Attack C22/C23: Cache OOM — cortex handles many concurrent agents
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_attack_c22_cortex_many_agents_no_crash() {
+        let state = AppState::new();
+
+        // Boot 20 agents and have each call cortex — verifies no panics or 500s
+        // under concurrent agent pressure (each has sufficient welcome credits)
+        for _ in 0..20 {
+            let (did, _) = boot(&state, None).await;
+            let (status, resp) = req(
+                state.clone(),
+                Method::POST,
+                "/v1/sense/cortex",
+                Some(&did),
+                Some(json!({"query": "cache pressure test"})),
+            )
+            .await;
+            assert!(
+                status == StatusCode::OK || status == StatusCode::PAYMENT_REQUIRED,
+                "Cortex must not crash under many-agent load, got {status}: {resp}"
+            );
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Security header checks — [server.rs HSTS / no-cache]
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_security_headers_present() {
+        let state = AppState::new();
+        let app = build_router(state);
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let headers = response.headers();
+        assert_eq!(
+            headers.get("x-content-type-options").and_then(|v| v.to_str().ok()),
+            Some("nosniff"),
+            "x-content-type-options must be set"
+        );
+        assert_eq!(
+            headers.get("x-frame-options").and_then(|v| v.to_str().ok()),
+            Some("DENY"),
+            "x-frame-options must be set"
+        );
+        assert!(
+            headers.get("strict-transport-security").is_some(),
+            "HSTS header must be set"
+        );
+        assert_eq!(
+            headers.get("cache-control").and_then(|v| v.to_str().ok()),
+            Some("no-store"),
+            "cache-control: no-store must be set"
+        );
+        assert_eq!(
+            headers.get("referrer-policy").and_then(|v| v.to_str().ok()),
+            Some("no-referrer"),
+            "referrer-policy must be set"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Dust attack: pool join with MIN_STAKE boundary check
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_attack_dust_pool_join_below_min_stake_rejected() {
+        let state = AppState::new();
+        let (creator, _) = boot(&state, None).await;
+        let (joiner, _) = boot(&state, None).await;
+
+        let (_, pool_resp) = create_pool(&state, &creator, 10.0, 5_000_000).await;
+        let pool_id = pool_resp["pool_id"].as_str().unwrap().to_string();
+
+        // Try stake of 999 (below MIN_STAKE = 1_000)
+        let (status, resp) = join_pool(&state, &joiner, &pool_id, 999).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "Stake below MIN_STAKE must be rejected: {resp}"
+        );
+        assert_eq!(resp["error"], "stake_too_small");
+    }
+
+    #[tokio::test]
+    async fn test_attack_dust_pool_join_min_stake_accepted() {
+        let state = AppState::new();
+        let (creator, _) = boot(&state, None).await;
+        let (joiner, _) = boot(&state, None).await;
+
+        let (_, pool_resp) = create_pool(&state, &creator, 10.0, 5_000_000).await;
+        let pool_id = pool_resp["pool_id"].as_str().unwrap().to_string();
+
+        // Exactly MIN_STAKE = 1_000 must succeed
+        let (status, resp) = join_pool(&state, &joiner, &pool_id, 1_000).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "Stake at exactly MIN_STAKE must succeed: {resp}"
+        );
     }
 }

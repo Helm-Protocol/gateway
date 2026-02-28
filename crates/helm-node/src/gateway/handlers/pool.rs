@@ -164,7 +164,10 @@ pub async fn handle_create_pool(
     let creation_fee = 5 * VIRTUAL_UNIT;
     state.record_api_call(&did, "pool/create", creation_fee).await;
 
-    tracing::info!("Pool created: {} vendor={} goal={} by={}", pool_id, req.vendor, req.bnkr_goal, did);
+    // Sanitize vendor field before logging (log injection prevention)
+    let safe_vendor = req.vendor.replace(['\r', '\n', '\0'], "_");
+    let safe_name = req.name.replace(['\r', '\n', '\0'], "_");
+    tracing::info!("Pool created: {} name={} vendor={} goal={} by={}", pool_id, safe_name, safe_vendor, req.bnkr_goal, did);
 
     Ok((StatusCode::CREATED, Json(CreatePoolResponse {
         pool_id,
@@ -212,67 +215,72 @@ pub async fn handle_join_pool(
         return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "stake_must_be_positive"}))));
     }
 
-    // Verify caller has sufficient balance before acquiring pool write lock
-    {
-        let agents = state.agents.read().await;
-        let balance = agents.get(&did).map(|a| a.virtual_balance).unwrap_or(0);
-        if balance < req.stake_virtual {
-            return Err((StatusCode::PAYMENT_REQUIRED, Json(json!({
-                "error": "insufficient_balance",
-                "required": req.stake_virtual,
-                "available": balance,
-                "message": "Insufficient VIRTUAL balance to join pool with this stake"
-            }))));
-        }
-    }
-
-    let mut pools = state.pools.write().await;
-    let pool = pools.get_mut(&pool_id).ok_or_else(|| (
-        StatusCode::NOT_FOUND,
-        Json(json!({"error": "pool_not_found", "pool_id": pool_id})),
-    ))?;
-
-    if pool.status != PoolStatus::Fundraising {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": "pool_not_open",
-                "status": format!("{:?}", pool.status),
-                "message": "This pool is no longer accepting contributions"
-            })),
-        ));
-    }
-
-    // Enforce pool member cap
-    let is_existing_member = pool.members.iter().any(|m| m.did == did);
-    if !is_existing_member && pool.members.len() >= MAX_POOL_MEMBERS {
-        return Err((StatusCode::CONFLICT, Json(json!({
-            "error": "pool_full",
-            "max_members": MAX_POOL_MEMBERS
+    // Minimum stake: 1_000 μVIRTUAL (blocks dust/griefing attacks)
+    const MIN_STAKE: u64 = 1_000;
+    if req.stake_virtual < MIN_STAKE {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({
+            "error": "stake_too_small",
+            "min_stake": MIN_STAKE
         }))));
     }
 
-    // Add or update stake (safe: write lock held throughout)
-    if let Some(m) = pool.members.iter_mut().find(|m| m.did == did) {
-        m.stake_bnkr = m.stake_bnkr.saturating_add(req.stake_virtual);
-    } else {
-        pool.members.push(PoolMember {
-            did: did.clone(),
-            stake_bnkr: req.stake_virtual,
-            credits_this_cycle: 0,
-            joined_at_ms: now_ms(),
-        });
-    }
+    // TOCTOU fix: deduct balance ATOMICALLY first, restore on any pool error.
+    // Old pattern (check → pool → deduct) had a race window where two concurrent
+    // requests both passed the check then both deducted from the same balance.
+    let stake = req.stake_virtual;
+    state.deduct_balance(&did, stake).await
+        .map_err(|avail| (StatusCode::PAYMENT_REQUIRED, Json(json!({
+            "error": "insufficient_balance",
+            "required": stake,
+            "available": avail,
+            "message": "Insufficient VIRTUAL balance to join pool with this stake"
+        }))))?;
 
-    pool.bnkr_collected = pool.bnkr_collected.saturating_add(req.stake_virtual);
-    drop(pools);
+    // Pool update — restore balance on failure
+    let pool_err: Option<(StatusCode, Json<serde_json::Value>)> = {
+        let mut pools = state.pools.write().await;
+        match pools.get_mut(&pool_id) {
+            None => Some((StatusCode::NOT_FOUND, Json(json!({"error": "pool_not_found", "pool_id": pool_id})))),
+            Some(pool) if pool.status != PoolStatus::Fundraising => Some((
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "pool_not_open",
+                    "status": format!("{:?}", pool.status),
+                    "message": "This pool is no longer accepting contributions"
+                })),
+            )),
+            Some(pool) => {
+                let is_existing_member = pool.members.iter().any(|m| m.did == did);
+                if !is_existing_member && pool.members.len() >= MAX_POOL_MEMBERS {
+                    Some((StatusCode::CONFLICT, Json(json!({
+                        "error": "pool_full",
+                        "max_members": MAX_POOL_MEMBERS
+                    }))))
+                } else {
+                    if let Some(m) = pool.members.iter_mut().find(|m| m.did == did) {
+                        m.stake_bnkr = m.stake_bnkr.saturating_add(stake);
+                    } else {
+                        pool.members.push(PoolMember {
+                            did: did.clone(),
+                            stake_bnkr: stake,
+                            credits_this_cycle: 0,
+                            joined_at_ms: now_ms(),
+                        });
+                    }
+                    pool.bnkr_collected = pool.bnkr_collected.saturating_add(stake);
+                    None
+                }
+            }
+        }
+    };
 
-    // Deduct stake from caller's balance
-    {
+    // Rollback on pool error
+    if let Some(e) = pool_err {
         let mut agents = state.agents.write().await;
         if let Some(agent) = agents.get_mut(&did) {
-            agent.virtual_balance = agent.virtual_balance.saturating_sub(req.stake_virtual);
+            agent.virtual_balance = agent.virtual_balance.saturating_add(stake);
         }
+        return Err(e);
     }
 
     let (total_collected, progress_pct) = {
