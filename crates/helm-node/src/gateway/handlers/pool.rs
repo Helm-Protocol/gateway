@@ -71,23 +71,54 @@ pub struct CreatePoolResponse {
     pub message: String,
 }
 
+const MAX_MONTHLY_COST_USD: f64 = 1_000_000.0; // $1M/month upper bound
+const MAX_POOL_MEMBERS: usize = 1_000;
+
 pub async fn handle_create_pool(
     State(state): State<AppState>,
     Extension(CallerDid(did)): Extension<CallerDid>,
     Json(req): Json<CreatePoolRequest>,
 ) -> Result<(StatusCode, Json<CreatePoolResponse>), (StatusCode, Json<serde_json::Value>)> {
-    if req.monthly_cost_usd <= 0.0 {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_monthly_cost"}))));
+    if !req.monthly_cost_usd.is_finite() || req.monthly_cost_usd <= 0.0 {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({
+            "error": "invalid_monthly_cost",
+            "message": "monthly_cost_usd must be a positive finite number"
+        }))));
+    }
+    if req.monthly_cost_usd > MAX_MONTHLY_COST_USD {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({
+            "error": "monthly_cost_too_high",
+            "max_usd": MAX_MONTHLY_COST_USD
+        }))));
     }
     if req.bnkr_goal == 0 {
         return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_goal"}))));
+    }
+    if req.name.trim().is_empty() || req.name.len() > 128 {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_name", "max_chars": 128}))));
+    }
+    if req.vendor.trim().is_empty() || req.vendor.len() > 64 {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_vendor", "max_chars": 64}))));
     }
 
     let pool_id = Uuid::new_v4().to_string();
     let now = now_ms();
 
-    // Validate initial contribution doesn't exceed goal
+    // Validate initial contribution doesn't exceed goal and caller has sufficient balance
     let initial = req.initial_contribution.min(req.bnkr_goal);
+    if initial > 0 {
+        let agents = state.agents.read().await;
+        if let Some(agent) = agents.get(&did) {
+            if agent.virtual_balance < initial {
+                return Err((StatusCode::PAYMENT_REQUIRED, Json(json!({
+                    "error": "insufficient_balance",
+                    "required": initial,
+                    "available": agent.virtual_balance,
+                    "message": "Insufficient VIRTUAL balance for initial pool contribution"
+                }))));
+            }
+        }
+    }
 
     let mut members = Vec::new();
     if initial > 0 {
@@ -118,6 +149,14 @@ pub async fn handle_create_pool(
     };
 
     state.pools.write().await.insert(pool_id.clone(), pool);
+
+    // Deduct initial contribution from caller's balance
+    if initial > 0 {
+        let mut agents = state.agents.write().await;
+        if let Some(agent) = agents.get_mut(&did) {
+            agent.virtual_balance = agent.virtual_balance.saturating_sub(initial);
+        }
+    }
 
     let progress_pct = initial as f64 / req.bnkr_goal as f64 * 100.0;
 
@@ -173,6 +212,20 @@ pub async fn handle_join_pool(
         return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "stake_must_be_positive"}))));
     }
 
+    // Verify caller has sufficient balance before acquiring pool write lock
+    {
+        let agents = state.agents.read().await;
+        let balance = agents.get(&did).map(|a| a.virtual_balance).unwrap_or(0);
+        if balance < req.stake_virtual {
+            return Err((StatusCode::PAYMENT_REQUIRED, Json(json!({
+                "error": "insufficient_balance",
+                "required": req.stake_virtual,
+                "available": balance,
+                "message": "Insufficient VIRTUAL balance to join pool with this stake"
+            }))));
+        }
+    }
+
     let mut pools = state.pools.write().await;
     let pool = pools.get_mut(&pool_id).ok_or_else(|| (
         StatusCode::NOT_FOUND,
@@ -190,9 +243,18 @@ pub async fn handle_join_pool(
         ));
     }
 
-    // Check if already a member
+    // Enforce pool member cap
+    let is_existing_member = pool.members.iter().any(|m| m.did == did);
+    if !is_existing_member && pool.members.len() >= MAX_POOL_MEMBERS {
+        return Err((StatusCode::CONFLICT, Json(json!({
+            "error": "pool_full",
+            "max_members": MAX_POOL_MEMBERS
+        }))));
+    }
+
+    // Add or update stake (safe: write lock held throughout)
     if let Some(m) = pool.members.iter_mut().find(|m| m.did == did) {
-        m.stake_bnkr += req.stake_virtual;
+        m.stake_bnkr = m.stake_bnkr.saturating_add(req.stake_virtual);
     } else {
         pool.members.push(PoolMember {
             did: did.clone(),
@@ -202,16 +264,34 @@ pub async fn handle_join_pool(
         });
     }
 
-    pool.bnkr_collected += req.stake_virtual;
-    let progress_pct = pool.bnkr_collected as f64 / pool.bnkr_goal as f64 * 100.0;
-    let total_collected = pool.bnkr_collected;
+    pool.bnkr_collected = pool.bnkr_collected.saturating_add(req.stake_virtual);
+    drop(pools);
 
-    // Transition status when fully funded; human recruitment is always manual
-    if progress_pct >= 100.0 {
-        pool.status = PoolStatus::AwaitingOperator;
+    // Deduct stake from caller's balance
+    {
+        let mut agents = state.agents.write().await;
+        if let Some(agent) = agents.get_mut(&did) {
+            agent.virtual_balance = agent.virtual_balance.saturating_sub(req.stake_virtual);
+        }
     }
 
-    drop(pools);
+    let (total_collected, progress_pct) = {
+        let pools = state.pools.read().await;
+        let pool = pools.get(&pool_id).unwrap();
+        let total = pool.bnkr_collected;
+        let pct = total as f64 / pool.bnkr_goal as f64 * 100.0;
+        (total, pct)
+    };
+
+    // Transition status when fully funded
+    if progress_pct >= 100.0 {
+        let mut pools = state.pools.write().await;
+        if let Some(pool) = pools.get_mut(&pool_id) {
+            if pool.status == PoolStatus::Fundraising {
+                pool.status = PoolStatus::AwaitingOperator;
+            }
+        }
+    }
 
     state.record_api_call(&did, "pool/join", 0).await; // joining is free
 

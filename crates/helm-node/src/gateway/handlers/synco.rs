@@ -112,12 +112,26 @@ pub struct SyncoResponse {
     pub mode: String,
 }
 
+/// Max raw bytes accepted for Sync-O encode/decode: 50 MB
+const MAX_SYNCO_BYTES: usize = 50 * 1024 * 1024;
+/// Max base64 string length (50MB raw ≈ 67MB base64)
+const MAX_SYNCO_B64_LEN: usize = 67 * 1024 * 1024;
+
 pub async fn handle_synco(
     State(state): State<AppState>,
     Extension(CallerDid(did)): Extension<CallerDid>,
     Json(req): Json<SyncoRequest>,
 ) -> Result<Json<SyncoResponse>, (StatusCode, Json<serde_json::Value>)> {
     let t_start = std::time::Instant::now();
+
+    // Validate base64 string size before decoding
+    if req.data_b64.len() > MAX_SYNCO_B64_LEN {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, Json(json!({
+            "error": "data_too_large",
+            "max_bytes": MAX_SYNCO_BYTES,
+            "message": "data_b64 exceeds maximum allowed size (50 MB raw)"
+        }))));
+    }
 
     // Decode input data
     use base64::Engine;
@@ -133,6 +147,12 @@ pub async fn handle_synco(
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "empty_data", "message": "data_b64 cannot be empty"})),
         ));
+    }
+    if raw_data.len() > MAX_SYNCO_BYTES {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, Json(json!({
+            "error": "data_too_large",
+            "max_bytes": MAX_SYNCO_BYTES
+        }))));
     }
 
     // Map mode to GRG mode
@@ -294,6 +314,13 @@ pub async fn handle_synco_decode(
 ) -> Result<Json<SyncoDecodeResponse>, (StatusCode, Json<serde_json::Value>)> {
     let t_start = std::time::Instant::now();
 
+    if req.data_b64.len() > MAX_SYNCO_B64_LEN {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, Json(json!({
+            "error": "data_too_large",
+            "max_bytes": MAX_SYNCO_BYTES
+        }))));
+    }
+
     use base64::Engine;
     let encoded_blob = base64::engine::general_purpose::STANDARD
         .decode(&req.data_b64)
@@ -307,6 +334,12 @@ pub async fn handle_synco_decode(
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "empty_data"})),
         ));
+    }
+    if encoded_blob.len() > MAX_SYNCO_BYTES {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, Json(json!({
+            "error": "data_too_large",
+            "max_bytes": MAX_SYNCO_BYTES
+        }))));
     }
 
     use helm_engine::GrgPipeline;

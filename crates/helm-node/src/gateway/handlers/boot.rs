@@ -73,10 +73,46 @@ pub struct BootResponse {
 /// 10 VIRTUAL = ~$6.50 — enough for ~5 Alpha Hunt calls.
 const WELCOME_CREDITS: u64 = 10 * VIRTUAL_UNIT;
 
+const MAX_CAPABILITY_LEN: usize = 64;
+const MAX_GITHUB_LOGIN_LEN: usize = 64;
+const MAX_TOKEN_LEN: usize = 16;
+const VALID_TOKENS: &[&str] = &["VIRTUAL", "BNKR", "USDC", "CLANKER"];
+
 pub async fn handle_boot(
     State(state): State<AppState>,
     Json(req): Json<BootRequest>,
 ) -> Result<(StatusCode, Json<BootResponse>), (StatusCode, Json<serde_json::Value>)> {
+    // Validate field lengths
+    if req.capability.len() > MAX_CAPABILITY_LEN {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({
+            "error": "capability_too_long",
+            "max_chars": MAX_CAPABILITY_LEN
+        }))));
+    }
+    if let Some(ref login) = req.github_login {
+        if login.len() > MAX_GITHUB_LOGIN_LEN {
+            return Err((StatusCode::BAD_REQUEST, Json(json!({
+                "error": "github_login_too_long",
+                "max_chars": MAX_GITHUB_LOGIN_LEN
+            }))));
+        }
+        // GitHub logins must be alphanumeric + hyphens only
+        if !login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err((StatusCode::BAD_REQUEST, Json(json!({
+                "error": "github_login_invalid",
+                "message": "GitHub login must be alphanumeric with hyphens only"
+            }))));
+        }
+    }
+    if req.preferred_token.len() > MAX_TOKEN_LEN
+        || !VALID_TOKENS.contains(&req.preferred_token.as_str())
+    {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({
+            "error": "invalid_preferred_token",
+            "valid": VALID_TOKENS
+        }))));
+    }
+
     // Validate referrer exists (if provided)
     if let Some(ref ref_did) = req.referrer_did {
         let agents = state.agents.read().await;

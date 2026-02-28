@@ -36,6 +36,8 @@ use crate::gateway::state::{AppState, MemoryEntry, now_ms};
 
 const FREE_TIER_QUOTA_BYTES: usize = 100 * 1024 * 1024; // 100 MB
 const MAX_VALUE_SIZE_BYTES: usize = 1024 * 1024; // 1 MB per entry
+const MAX_KEYS_PER_DID: usize = 10_000;
+const MAX_KEY_LEN: usize = 256;
 
 #[derive(Debug, Deserialize)]
 pub struct PutMemoryRequest {
@@ -123,8 +125,24 @@ pub async fn handle_memory_put(
     Path(key): Path<String>,
     Json(req): Json<PutMemoryRequest>,
 ) -> Result<Json<MemoryPutResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let serialized = serde_json::to_vec(&req.value).unwrap_or_default();
+    // Validate key length
+    if key.is_empty() || key.len() > MAX_KEY_LEN {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({
+            "error": "invalid_key_length",
+            "max_chars": MAX_KEY_LEN
+        }))));
+    }
+
+    // Serialize value and check size (fail explicitly on error — don't silently return 0 bytes)
+    let serialized = serde_json::to_vec(&req.value).map_err(|e| (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"error": "value_serialization_failed", "message": e.to_string()})),
+    ))?;
     let size_bytes = serialized.len();
+
+    if size_bytes == 0 {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "value_empty_after_serialization"}))));
+    }
 
     if size_bytes > MAX_VALUE_SIZE_BYTES {
         return Err((
@@ -137,15 +155,26 @@ pub async fn handle_memory_put(
         ));
     }
 
-    // Check quota
+    // Check quota and key count
     let internal_key = format!("{}/{}", did, key);
     {
         let memory = state.memory.read().await;
-        let current_usage: usize = memory
+        let prefix = format!("{}/", did);
+        let (current_key_count, current_usage): (usize, usize) = memory
             .iter()
-            .filter(|(k, _)| k.starts_with(&format!("{}/", did)))
-            .map(|(_, v)| v.size_bytes)
-            .sum();
+            .filter(|(k, _)| k.starts_with(&prefix))
+            .fold((0, 0), |(cnt, bytes), (_, v)| (cnt + 1, bytes + v.size_bytes));
+
+        // Only count as new key if it doesn't already exist
+        let is_new_key = !memory.contains_key(&internal_key);
+        if is_new_key && current_key_count >= MAX_KEYS_PER_DID {
+            return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(json!({
+                "error": "key_limit_reached",
+                "current_keys": current_key_count,
+                "max_keys": MAX_KEYS_PER_DID,
+                "hint": "Delete unused keys to make room"
+            }))));
+        }
 
         if current_usage + size_bytes > FREE_TIER_QUOTA_BYTES {
             return Err((

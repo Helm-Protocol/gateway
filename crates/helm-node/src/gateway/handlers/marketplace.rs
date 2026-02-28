@@ -45,6 +45,11 @@ pub struct CreatePostResponse {
     pub message: String,
 }
 
+const MAX_TITLE_LEN: usize = 200;
+const MAX_DESCRIPTION_LEN: usize = 4096;
+const MAX_PROPOSAL_LEN: usize = 2048;
+const MAX_APPLICATIONS_PER_POST: usize = 100;
+
 pub async fn handle_create_post(
     State(state): State<AppState>,
     Extension(CallerDid(did)): Extension<CallerDid>,
@@ -53,8 +58,14 @@ pub async fn handle_create_post(
     if req.title.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "title_required"}))));
     }
+    if req.title.len() > MAX_TITLE_LEN {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "title_too_long", "max_chars": MAX_TITLE_LEN}))));
+    }
     if req.description.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "description_required"}))));
+    }
+    if req.description.len() > MAX_DESCRIPTION_LEN {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "description_too_long", "max_chars": MAX_DESCRIPTION_LEN}))));
     }
 
     let post_type = match req.post_type.as_str() {
@@ -118,9 +129,11 @@ pub async fn handle_create_post(
 
     state.posts.write().await.insert(post_id.clone(), post);
 
+    // Sanitize for log injection (remove newlines from title before logging)
+    let safe_title = req.title.replace(['\r', '\n'], " ");
     tracing::info!(
-        "Marketplace post created: {} type={} by={}",
-        post_id, post_type_str, did
+        "Marketplace post created: {} type={} by={} title={}",
+        post_id, post_type_str, did, safe_title
     );
 
     Ok((StatusCode::CREATED, Json(CreatePostResponse {
@@ -190,6 +203,9 @@ pub async fn handle_apply(
     if req.proposal.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "proposal_required"}))));
     }
+    if req.proposal.len() > MAX_PROPOSAL_LEN {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "proposal_too_long", "max_chars": MAX_PROPOSAL_LEN}))));
+    }
 
     let mut posts = state.posts.write().await;
     let post = posts.get_mut(&post_id).ok_or_else(|| (
@@ -209,6 +225,14 @@ pub async fn handle_apply(
         return Err((
             StatusCode::CONFLICT,
             Json(json!({"error": "already_applied"})),
+        ));
+    }
+
+    // Enforce max applications per post (spam protection)
+    if post.applications.len() >= MAX_APPLICATIONS_PER_POST {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({"error": "post_application_limit_reached", "max": MAX_APPLICATIONS_PER_POST})),
         ));
     }
 

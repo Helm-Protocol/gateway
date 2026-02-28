@@ -94,12 +94,40 @@ pub enum FreshnessVerdict {
     Stale,
 }
 
+const MAX_SIGNAL_LEN: usize = 65_536;   // 64 KB signal text
+const MAX_CONTEXT_LEN: usize = 4_096;   // per context item
+const MAX_CONTEXT_ITEMS: usize = 50;
+const MAX_SHIELD_B64_LEN: usize = 67 * 1024 * 1024; // ~50MB raw
+const MAX_SHIELD_BYTES: usize = 50 * 1024 * 1024;
+
 pub async fn handle_alpha_hunt(
     State(state): State<AppState>,
     Extension(CallerDid(did)): Extension<CallerDid>,
     Json(req): Json<AlphaHuntRequest>,
 ) -> Result<Json<AlphaHuntResponse>, (StatusCode, Json<serde_json::Value>)> {
     let t_start = std::time::Instant::now();
+
+    // Validate input sizes
+    if req.signal.len() > MAX_SIGNAL_LEN {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({
+            "error": "signal_too_long",
+            "max_chars": MAX_SIGNAL_LEN
+        }))));
+    }
+    if req.known_context.len() > MAX_CONTEXT_ITEMS {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({
+            "error": "too_many_context_items",
+            "max_items": MAX_CONTEXT_ITEMS
+        }))));
+    }
+    for ctx in &req.known_context {
+        if ctx.len() > MAX_CONTEXT_LEN {
+            return Err((StatusCode::BAD_REQUEST, Json(json!({
+                "error": "context_item_too_long",
+                "max_chars": MAX_CONTEXT_LEN
+            }))));
+        }
+    }
 
     // Step 1: Sync-O — compute data entropy as freshness proxy
     let data_bytes = req.signal.as_bytes();
@@ -251,10 +279,24 @@ pub async fn handle_protocol_shield(
 ) -> Result<Json<ProtocolShieldResponse>, (StatusCode, Json<serde_json::Value>)> {
     let t_start = std::time::Instant::now();
 
+    if req.data_b64.len() > MAX_SHIELD_B64_LEN {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, Json(json!({
+            "error": "data_too_large",
+            "max_bytes": MAX_SHIELD_BYTES
+        }))));
+    }
+
     use base64::Engine;
     let raw_data = base64::engine::general_purpose::STANDARD
         .decode(&req.data_b64)
         .map_err(|_| (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_base64"}))))?;
+
+    if raw_data.len() > MAX_SHIELD_BYTES {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, Json(json!({
+            "error": "data_too_large",
+            "max_bytes": MAX_SHIELD_BYTES
+        }))));
+    }
 
     // Run GRG pipeline (Sync-O)
     let pipeline = helm_engine::GrgPipeline::new(helm_engine::GrgMode::Safety)

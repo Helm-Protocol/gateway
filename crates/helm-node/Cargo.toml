@@ -36,7 +36,7 @@ base64 = "0.22"
 hex = "0.4"
 # HTTP Gateway
 axum = { version = "0.7", features = ["macros"] }
-tower-http = { version = "0.5", features = ["cors", "trace", "limit"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "limit", "set-header"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 tokio-util = { version = "0.7" }
 

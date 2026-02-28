@@ -106,11 +106,16 @@ fn compute_fico(breakdown: &ScoreBreakdown) -> u32 {
     score.min(850)
 }
 
+/// Limit FICO activity score to cap at this many API calls (prevents score farming).
+const FICO_API_CALL_CAP: u64 = 10_000;
+
 pub async fn handle_fico(
     State(state): State<AppState>,
     Extension(CallerDid(caller_did)): Extension<CallerDid>,
     Path(did): Path<String>,
 ) -> Result<Json<FicoResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let is_self_query = caller_did == did;
+
     let agents = state.agents.read().await;
     let agent = agents.get(&did).ok_or_else(|| (
         StatusCode::NOT_FOUND,
@@ -133,8 +138,8 @@ pub async fn handle_fico(
         _ => 150,
     };
 
-    // 2. Activity score (0–200): log-scale of API calls
-    let api_calls = agent.api_call_count;
+    // 2. Activity score (0–200): log-scale of API calls (capped to prevent farming)
+    let api_calls = agent.api_call_count.min(FICO_API_CALL_CAP);
     let activity_score = match api_calls {
         0 => 0,
         1..=9 => 20,
@@ -230,6 +235,36 @@ pub async fn handle_fico(
     // Charge 2 VIRTUAL for the query
     let virtual_charged = 2 * VIRTUAL_UNIT;
     state.record_api_call(&caller_did, "agent/credit", virtual_charged).await;
+
+    // Non-self queries receive a redacted response:
+    // score, band, escrow_exempt are public (needed for trade decisions).
+    // Financial internals (breakdown, max_no_escrow details, spend) are private.
+    if !is_self_query {
+        return Ok(Json(FicoResponse {
+            did,
+            score,
+            band,
+            escrow_exempt,
+            breakdown: ScoreBreakdown {
+                age_score: 0,
+                activity_score: 0,
+                financial_score: 0,
+                social_score: 0,
+                pool_score: 0,
+                bond_score: 0,
+                helm_reputation_score: 0,
+                total_raw: 0,
+            },
+            max_no_escrow_bnkr: if escrow_exempt { max_no_escrow_bnkr } else { 0 },
+            did_age_days: 0,
+            total_api_calls: 0,
+            pool_memberships: 0,
+            referral_tree_size: 0,
+            is_elite,
+            is_human_operator,
+            virtual_charged,
+        }));
+    }
 
     Ok(Json(FicoResponse {
         did,

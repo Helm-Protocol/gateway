@@ -40,13 +40,16 @@
 
 use axum::{
     extract::State,
+    http::{HeaderName, HeaderValue},
     middleware,
     routing::{delete, get, post, put},
     Json, Router,
 };
 use serde_json::json;
 use tower_http::{
-    cors::{Any, CorsLayer},
+    cors::{AllowOrigin, CorsLayer},
+    limit::RequestBodyLimitLayer,
+    set_header::SetResponseHeaderLayer,
     trace::TraceLayer,
 };
 
@@ -64,13 +67,26 @@ use crate::gateway::handlers::{
 };
 use crate::gateway::state::AppState;
 
+/// Maximum allowed request body size: 10 MB.
+const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
+
 /// Build the Axum router with all routes and middleware.
 pub fn build_router(state: AppState) -> Router {
-    // CORS: allow all origins (agents can call from anywhere)
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    // CORS: read allowed origins from HELM_CORS_ORIGINS env var (comma-separated).
+    // Falls back to denying all cross-origin requests if not set.
+    // Set HELM_CORS_ORIGINS=* only for local development.
+    let cors = build_cors_layer();
+
+    // Security headers applied to every response
+    let nosniff = SetResponseHeaderLayer::if_not_present(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+
+    let xframe = SetResponseHeaderLayer::if_not_present(
+        HeaderName::from_static("x-frame-options"),
+        HeaderValue::from_static("DENY"),
+    );
 
     // Authenticated routes (require DID Bearer token)
     let authed = Router::new()
@@ -111,9 +127,74 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(authed)
         .merge(public)
+        .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
+        .layer(nosniff)
+        .layer(xframe)
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// Build CORS layer from HELM_CORS_ORIGINS environment variable.
+///
+/// - If HELM_CORS_ORIGINS is set, use it as a comma-separated allowlist.
+/// - If HELM_CORS_ORIGINS=*, allow all (dev only — never set in production).
+/// - If unset, use a restrictive default (same-origin only).
+fn build_cors_layer() -> CorsLayer {
+    use tower_http::cors::Any;
+    use axum::http::HeaderName as HN;
+
+    let allowed_methods = vec![
+        axum::http::Method::GET,
+        axum::http::Method::POST,
+        axum::http::Method::PUT,
+        axum::http::Method::DELETE,
+        axum::http::Method::OPTIONS,
+    ];
+
+    let allowed_headers = vec![
+        HN::from_static("authorization"),
+        HN::from_static("content-type"),
+        HN::from_static("x-helm-signature"),
+    ];
+
+    match std::env::var("HELM_CORS_ORIGINS") {
+        Ok(origins) if origins.trim() == "*" => {
+            tracing::warn!("CORS set to wildcard (*). Only use this in local development.");
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(allowed_methods)
+                .allow_headers(allowed_headers)
+        }
+        Ok(origins) => {
+            let parsed: Vec<HeaderValue> = origins
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter_map(|s| s.parse::<HeaderValue>().ok())
+                .collect();
+
+            if parsed.is_empty() {
+                tracing::warn!("HELM_CORS_ORIGINS set but no valid origins parsed. Disabling CORS.");
+                CorsLayer::new()
+                    .allow_methods(allowed_methods)
+                    .allow_headers(allowed_headers)
+            } else {
+                tracing::info!("CORS allowlist: {} origin(s)", parsed.len());
+                CorsLayer::new()
+                    .allow_origin(AllowOrigin::list(parsed))
+                    .allow_methods(allowed_methods)
+                    .allow_headers(allowed_headers)
+            }
+        }
+        Err(_) => {
+            // Unset: restrict to same-origin (no CORS headers sent).
+            // Agents calling from server-to-server don't need CORS.
+            tracing::info!("HELM_CORS_ORIGINS not set — CORS restricted to same-origin.");
+            CorsLayer::new()
+                .allow_methods(allowed_methods)
+                .allow_headers(allowed_headers)
+        }
+    }
 }
 
 /// GET /health
@@ -185,5 +266,6 @@ async fn handle_root() -> Json<serde_json::Value> {
         },
         "auth": "Authorization: Bearer did:helm:<your-did>",
         "start": "POST /v1/agent/boot to get your DID",
+        "signature": "X-Helm-Signature: <base64(ed25519_sign(sha256(body)))> for write ops",
     }))
 }

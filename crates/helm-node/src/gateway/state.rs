@@ -9,6 +9,9 @@ use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Maximum number of API call records to retain (LRU: oldest dropped first).
+const MAX_API_CALLS_LOG: usize = 1_000_000;
+
 use helm_engine::{BillingLedger, HelmAttentionEngine, GrgPipeline, GrgMode};
 use helm_agent::socratic::claw::SocraticClaw;
 
@@ -264,6 +267,9 @@ pub struct AppState {
     /// API call log for referral graph tracking
     pub api_calls: Arc<RwLock<Vec<ApiCallRecord>>>,
 
+    /// Rate limit tracking: DID → Vec<call_timestamp_ms> (sliding window)
+    pub rate_limits: Arc<RwLock<HashMap<String, Vec<u64>>>>,
+
     /// Gateway start timestamp
     pub started_at_ms: u64,
 }
@@ -296,6 +302,7 @@ impl AppState {
             claws: Arc::new(RwLock::new(HashMap::new())),
             grg: GrgPipeline::new(GrgMode::Safety),
             api_calls: Arc::new(RwLock::new(Vec::new())),
+            rate_limits: Arc::new(RwLock::new(HashMap::new())),
             started_at_ms: now_ms(),
         }
     }
@@ -337,7 +344,15 @@ impl AppState {
             referrer_earned,
             created_at_ms: now_ms(),
         };
-        self.api_calls.write().await.push(record);
+        // Bound the call log size: drop oldest entries when limit hit
+        {
+            let mut calls = self.api_calls.write().await;
+            if calls.len() >= MAX_API_CALLS_LOG {
+                let drain_count = calls.len() - MAX_API_CALLS_LOG + 1;
+                calls.drain(0..drain_count);
+            }
+            calls.push(record);
+        }
 
         // Update billing
         let ts = now_ms();

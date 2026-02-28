@@ -183,12 +183,49 @@ fn text_to_kv(text: &str) -> (Vec<f32>, Vec<f32>) {
     (key, value)
 }
 
+const MAX_CONTEXT_ITEMS: usize = 50;
+const MAX_CONTEXT_ITEM_LEN: usize = 4096;
+const MAX_QUERY_TEXT_LEN: usize = 65536;
+const MAX_QUERY_VECTOR_DIM: usize = 512; // accept up to 512 dims; truncated to 64 internally
+
 pub async fn handle_cortex(
     State(state): State<AppState>,
     Extension(CallerDid(did)): Extension<CallerDid>,
     Json(req): Json<CortexRequest>,
 ) -> Result<Json<CortexResponse>, (StatusCode, Json<serde_json::Value>)> {
     let t_start = std::time::Instant::now();
+
+    // Validate input sizes
+    if req.knowledge_context.len() > MAX_CONTEXT_ITEMS {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({
+            "error": "too_many_context_items",
+            "max_items": MAX_CONTEXT_ITEMS,
+            "provided": req.knowledge_context.len()
+        }))));
+    }
+    for ctx in &req.knowledge_context {
+        if ctx.len() > MAX_CONTEXT_ITEM_LEN {
+            return Err((StatusCode::BAD_REQUEST, Json(json!({
+                "error": "context_item_too_long",
+                "max_chars": MAX_CONTEXT_ITEM_LEN
+            }))));
+        }
+    }
+    match &req.query {
+        QueryInput::Text(t) if t.len() > MAX_QUERY_TEXT_LEN => {
+            return Err((StatusCode::BAD_REQUEST, Json(json!({
+                "error": "query_text_too_long",
+                "max_chars": MAX_QUERY_TEXT_LEN
+            }))));
+        }
+        QueryInput::Vector(v) if v.len() > MAX_QUERY_VECTOR_DIM => {
+            return Err((StatusCode::BAD_REQUEST, Json(json!({
+                "error": "query_vector_too_large",
+                "max_dims": MAX_QUERY_VECTOR_DIM
+            }))));
+        }
+        _ => {}
+    }
 
     // Get or create QKV-G attention engine for this DID
     let mut attention_cache = state.attention_cache.write().await;
