@@ -39,6 +39,12 @@ pub struct BootRequest {
     /// Preferred payment token for future calls: "VIRTUAL" | "BNKR" | "USDC"
     #[serde(default = "default_token")]
     pub preferred_token: String,
+
+    /// BYOK: Optional external identity to bind at boot time.
+    /// E.g. "did:ethr:0xABC...", "did:web:agent.example.com", "did:key:z6Mk..."
+    /// If provided, this global_did is stored in did_mappings → local_did at creation.
+    /// After boot, call POST /v1/auth/exchange to get a 30-day session token.
+    pub global_did: Option<String>,
 }
 
 fn default_capability() -> String { "compute".to_string() }
@@ -67,6 +73,10 @@ pub struct BootResponse {
     pub boot_cost_virtual: u64,
     /// Created at (unix ms)
     pub created_at_ms: u64,
+    /// Bound global_did (if provided at boot time)
+    pub global_did: Option<String>,
+    /// If global_did was provided: call POST /v1/auth/exchange to get a 30-day session token
+    pub byok_hint: Option<String>,
 }
 
 /// Welcome credits given to new agents (in VIRTUAL micro-units).
@@ -207,12 +217,24 @@ pub async fn handle_boot(
     let ts = now_ms();
     state.billing.write().await.charge_did_registration(&did, ts);
 
+    // BYOK: If global_did was provided, store the mapping immediately
+    if let Some(ref gd) = req.global_did {
+        if !gd.trim().is_empty() && gd.len() <= 256 {
+            state.did_mappings.write().await.insert(gd.clone(), did.clone());
+            tracing::info!("BYOK bind at boot: global_did={} → local_did={}", gd, did);
+        }
+    }
+
     // Sanitize user inputs before logging (log injection prevention)
     let safe_capability = req.capability.replace(['\r', '\n', '\0'], "_");
     let safe_github = req.github_login.as_deref().unwrap_or("none").replace(['\r', '\n', '\0'], "_");
     tracing::info!("AgentBoot: new DID {} capability={} github={} referrer={}",
         did, safe_capability, safe_github,
         req.referrer_did.as_deref().unwrap_or("none"));
+
+    let byok_hint = req.global_did.as_ref().map(|_| {
+        "global_did bound. Call POST /v1/auth/exchange with your Ed25519 signature to get a 30-day session token.".to_string()
+    });
 
     Ok((
         StatusCode::CREATED,
@@ -227,6 +249,8 @@ pub async fn handle_boot(
             referrer_cut_bps: 1500,
             boot_cost_virtual: boot_cost,
             created_at_ms: now,
+            global_did: req.global_did,
+            byok_hint,
         }),
     ))
 }

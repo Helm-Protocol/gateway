@@ -37,18 +37,38 @@ pub struct CallerDid(pub String);
 pub const RATE_LIMIT_MAX: usize = 30;
 const RATE_LIMIT_WINDOW_MS: u64 = 60_000; // 60 seconds
 
+/// Resolve a Bearer token to a did:helm: DID string.
+/// Supports three formats:
+///   1. "Bearer did:helm:xxx"            — direct DID bearer (original)
+///   2. "Bearer helm_sess_<hex>"         — session token from /v1/auth/exchange
+///   3. "Bearer did:helm:xxx:role"       — hierarchical sub-DID (role verified separately)
+///
+/// Returns the resolved base did:helm: DID.
+/// Session token resolution is async (requires state), so callers that need it
+/// use `resolve_bearer_token` instead. This sync version handles cases 1 and 3.
 pub fn extract_did_from_headers(headers: &HeaderMap) -> Option<String> {
     let auth = headers.get("authorization")?;
     let val = auth.to_str().ok()?;
 
-    // Accept: "Bearer did:helm:..." or just "did:helm:..."
     let token = val
         .strip_prefix("Bearer ")
         .unwrap_or(val)
         .trim();
 
     if token.starts_with("did:helm:") {
-        Some(token.to_string())
+        // Sub-DID routing: "did:helm:xxx:pool_3" → base = "did:helm:xxx"
+        // The role portion after the 3rd colon is used for endpoint-level ACL checks.
+        let parts: Vec<&str> = token.splitn(4, ':').collect();
+        if parts.len() >= 3 {
+            // Reconstruct base DID (first 3 segments)
+            Some(format!("{}:{}:{}", parts[0], parts[1], parts[2]))
+        } else {
+            Some(token.to_string())
+        }
+    } else if token.starts_with("helm_sess_") {
+        // Session token: resolution requires async state lookup — signal to middleware
+        // by returning a sentinel. The middleware calls resolve_session_token().
+        Some(format!("__sess__{}", token))
     } else {
         None
     }
@@ -125,7 +145,7 @@ pub async fn require_auth(
     mut request: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
-    let did = extract_did_from_headers(request.headers())
+    let raw_token = extract_did_from_headers(request.headers())
         .ok_or_else(|| {
             (
                 StatusCode::UNAUTHORIZED,
@@ -136,6 +156,30 @@ pub async fn require_auth(
                 })),
             )
         })?;
+
+    // Resolve session tokens (helm_sess_<hex>) to their bound DID
+    let did = if let Some(sess_token) = raw_token.strip_prefix("__sess__") {
+        let sessions = state.session_tokens.read().await;
+        match sessions.get(sess_token) {
+            Some(rec) if rec.expires_at_ms > now_ms() => rec.local_did.clone(),
+            Some(_) => return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": "session_expired",
+                    "message": "Session token has expired. Re-authenticate via POST /v1/auth/exchange.",
+                })),
+            )),
+            None => return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": "invalid_session_token",
+                    "message": "Session token not found. Obtain one via POST /v1/auth/exchange.",
+                })),
+            )),
+        }
+    } else {
+        raw_token
+    };
 
     // Verify DID is registered
     let pubkey_b58 = {
@@ -285,11 +329,23 @@ pub async fn optional_auth(
     mut request: Request,
     next: Next,
 ) -> Response {
-    if let Some(did) = extract_did_from_headers(request.headers()) {
-        let agents = state.agents.read().await;
-        if agents.contains_key(&did) {
-            drop(agents);
-            request.extensions_mut().insert(CallerDid(did));
+    if let Some(raw_token) = extract_did_from_headers(request.headers()) {
+        // Resolve session token if needed
+        let did = if let Some(sess_token) = raw_token.strip_prefix("__sess__") {
+            let sessions = state.session_tokens.read().await;
+            sessions.get(sess_token)
+                .filter(|r| r.expires_at_ms > now_ms())
+                .map(|r| r.local_did.clone())
+        } else {
+            Some(raw_token)
+        };
+
+        if let Some(did) = did {
+            let agents = state.agents.read().await;
+            if agents.contains_key(&did) {
+                drop(agents);
+                request.extensions_mut().insert(CallerDid(did));
+            }
         }
     }
     next.run(request).await

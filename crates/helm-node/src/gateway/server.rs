@@ -4,6 +4,7 @@
 //!
 //! ### Identity (DID 해자)
 //!   POST   /v1/agent/boot              → AgentBoot: create DID + init engine
+//!   POST   /v1/auth/exchange           → BYOK: bind external DID + issue 30d session token
 //!   GET    /v1/agent/:did/helm-score   → D-Line: Helm Score (agent reputation)
 //!   GET    /v1/agent/:did/earnings     → Graph 해자: referral earnings
 //!
@@ -29,6 +30,7 @@
 //!   POST   /v1/marketplace/post        → Create job / subcontract / HumanContractPrincipal post
 //!   GET    /v1/marketplace/post        → List open posts
 //!   POST   /v1/marketplace/post/:id/apply → Apply to a post
+//!   POST   /v1/marketplace/post/:id/accept/:applicant_did → Accept + settle (5% Helm fee)
 //!
 //! ### Packages
 //!   POST   /v1/package/alpha-hunt      → Package 1: DeFi signal pipeline
@@ -64,8 +66,9 @@ use crate::gateway::handlers::{
     boot::handle_boot,
     cortex::handle_cortex,
     earnings::{handle_earnings, handle_leaderboard},
+    exchange::handle_exchange,
     helm_score::handle_helm_score,
-    marketplace::{handle_apply, handle_create_post, handle_list_posts},
+    marketplace::{handle_accept_application, handle_apply, handle_create_post, handle_list_posts},
     memory::{handle_memory_del, handle_memory_get, handle_memory_list, handle_memory_put},
     packages::{handle_alpha_hunt, handle_protocol_shield},
     pool::{handle_claim_operator, handle_create_pool, handle_join_pool, handle_list_pools, handle_pool_status},
@@ -138,6 +141,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/marketplace/post",      post(handle_create_post))
         .route("/v1/marketplace/post",      get(handle_list_posts))
         .route("/v1/marketplace/post/:id/apply", post(handle_apply))
+        .route("/v1/marketplace/post/:id/accept/:applicant_did", post(handle_accept_application))
         // Packages
         .route("/v1/package/alpha-hunt",    post(handle_alpha_hunt))
         .route("/v1/package/protocol-shield", post(handle_protocol_shield))
@@ -148,6 +152,7 @@ pub fn build_router(state: AppState) -> Router {
     // Public routes (no auth required)
     let public = Router::new()
         .route("/v1/agent/boot",    post(handle_boot))
+        .route("/v1/auth/exchange", post(handle_exchange))   // BYOK DID bridge + session tokens
         .route("/v1/leaderboard",   get(handle_leaderboard))
         .route("/v1/stats",         get(handle_stats))
         .route("/health",           get(handle_health))

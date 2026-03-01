@@ -1,6 +1,7 @@
 pub mod boot;
 pub mod cortex;
 pub mod earnings;
+pub mod exchange;
 pub mod helm_score;
 pub mod marketplace;
 pub mod memory;

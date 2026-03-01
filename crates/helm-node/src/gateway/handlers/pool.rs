@@ -169,6 +169,9 @@ pub async fn handle_create_pool(
 
     let progress_pct = initial as f64 / req.bnkr_goal as f64 * 100.0;
 
+    // Record pool creation fee in billing ledger → 100% treasury
+    state.billing.write().await.charge_pool_creation(&did, now);
+
     // Record API call for tracking (balance was already deducted atomically above)
     state.record_api_call(&did, "pool/create", creation_fee).await;
 

@@ -18,6 +18,7 @@ use crate::gateway::auth::CallerDid;
 use crate::gateway::state::{
     AppState, Application, MarketplacePost, PostStatus, PostType, now_ms, MAX_POSTS_PER_DID,
 };
+use crate::gateway::pricing::VIRTUAL_UNIT;
 
 // ── Create Post ─────────────────────────────────────────────────────────────
 
@@ -27,11 +28,19 @@ pub struct CreatePostRequest {
     pub post_type: String,
     pub title: String,
     pub description: String,
-    /// Budget in BNKR micro-units
+    /// Budget in BNKR micro-units (legacy display field)
     pub budget_bnkr: u64,
+    /// Budget in VIRTUAL micro-units for on-chain settlement.
+    /// If > 0: creator will pay budget + 5% Helm fee when accepting an applicant.
+    /// If 0 (default): listing only — settlement is managed off-chain.
+    #[serde(default)]
+    pub budget_virtual: u64,
     /// Optional: link this post to a pool (required for HumanContractPrincipal)
     pub pool_id: Option<String>,
 }
+
+/// 5% marketplace settlement fee cap: max 500 VIRTUAL to avoid penalizing huge contracts
+const MAX_MARKETPLACE_FEE_VIRTUAL: u64 = 500 * VIRTUAL_UNIT;
 
 #[derive(Debug, Serialize)]
 pub struct CreatePostResponse {
@@ -126,11 +135,13 @@ pub async fn handle_create_post(
         title: req.title.clone(),
         description: req.description.clone(),
         budget_bnkr: req.budget_bnkr,
+        budget_virtual: req.budget_virtual,
         creator_did: did.clone(),
         pool_id: req.pool_id.clone(),
         status: PostStatus::Open,
         created_at_ms: now,
         applications: Vec::new(),
+        accepted_applicant_did: None,
     };
 
     // If this is a HumanContractPrincipal, link back to pool
@@ -267,5 +278,104 @@ pub async fn handle_apply(
         "applicant_did": did,
         "application_count": application_count,
         "message": "Application submitted. The post creator will review and accept.",
+    })))
+}
+
+// ── Accept Application ───────────────────────────────────────────────────────
+
+/// POST /v1/marketplace/post/:id/accept/:applicant_did
+///
+/// Creator accepts an applicant, triggering settlement:
+///   - If budget_virtual > 0: deduct (budget + 5% Helm fee) from creator's VIRTUAL balance.
+///     5% fee flows to treasury (100%). Budget is held as escrowed intent.
+///   - Post status → Filled. Applicant marked accepted.
+///   - 5% capped at 500 VIRTUAL to protect large contract values.
+pub async fn handle_accept_application(
+    State(state): State<AppState>,
+    Extension(CallerDid(did)): Extension<CallerDid>,
+    Path((post_id, applicant_did)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let now = now_ms();
+
+    // Load and validate post
+    let (budget_virtual, helm_fee) = {
+        let posts = state.posts.read().await;
+        let post = posts.get(&post_id).ok_or_else(|| (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "post_not_found", "post_id": post_id})),
+        ))?;
+
+        if post.creator_did != did {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "not_post_creator", "message": "Only the post creator can accept applications"})),
+            ));
+        }
+        if post.status != PostStatus::Open {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(json!({"error": "post_not_open", "status": format!("{:?}", post.status)})),
+            ));
+        }
+        if !post.applications.iter().any(|a| a.applicant_did == applicant_did) {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "applicant_not_found", "applicant_did": applicant_did})),
+            ));
+        }
+
+        let bv = post.budget_virtual;
+        // 5% Helm fee, capped at MAX_MARKETPLACE_FEE_VIRTUAL
+        let fee = (bv * 500 / 10_000).min(MAX_MARKETPLACE_FEE_VIRTUAL);
+        (bv, fee)
+    };
+
+    // Deduct budget + fee from creator (only if budget_virtual > 0)
+    if budget_virtual > 0 {
+        let total_due = budget_virtual.saturating_add(helm_fee);
+        state.deduct_balance(&did, total_due).await.map_err(|avail| (
+            StatusCode::PAYMENT_REQUIRED,
+            Json(json!({
+                "error": "insufficient_balance",
+                "required_virtual": total_due,
+                "budget_virtual": budget_virtual,
+                "helm_fee_virtual": helm_fee,
+                "available_virtual": avail,
+                "message": "Need job budget + 5% Helm marketplace fee in VIRTUAL balance.",
+            })),
+        ))?;
+
+        // Record 5% fee in billing ledger → treasury
+        state.billing.write().await.charge_marketplace_settlement(&did, budget_virtual, now);
+    }
+
+    // Mark post filled + applicant accepted
+    {
+        let mut posts = state.posts.write().await;
+        if let Some(post) = posts.get_mut(&post_id) {
+            post.status = PostStatus::Filled;
+            post.accepted_applicant_did = Some(applicant_did.clone());
+            for app in post.applications.iter_mut() {
+                if app.applicant_did == applicant_did {
+                    app.accepted = true;
+                }
+            }
+        }
+    }
+
+    tracing::info!(
+        "Marketplace accept: post={} applicant={} budget_virtual={} helm_fee={}",
+        post_id, applicant_did, budget_virtual, helm_fee
+    );
+
+    Ok(Json(json!({
+        "ok": true,
+        "post_id": post_id,
+        "accepted_applicant_did": applicant_did,
+        "budget_virtual": budget_virtual,
+        "helm_fee_virtual": helm_fee,
+        "helm_fee_pct": "5%",
+        "treasury": "0x7e0118A33202c03949167853b05631baC0fA9756",
+        "message": "Application accepted. Post is now Filled.",
     })))
 }

@@ -53,6 +53,12 @@ pub const REPUTATION_QUERY_FEE: u64 = 200;  // 0.0002 BNKR
 /// Sync-O stream clean fee per 1000 items
 pub const SYNCO_CLEAN_FEE: u64 = 100;  // 0.0001 BNKR per 1000 items
 
+/// Marketplace job settlement fee: 5% of job budget → 100% treasury
+pub const MARKETPLACE_FEE_BP: u64 = 500;
+
+/// Pool creation fee in VIRTUAL micro-units (5 VIRTUAL → treasury)
+pub const POOL_CREATION_FEE_VIRTUAL: u64 = 5_000_000;
+
 /// A-Front (LLM proxy) markup over cost: 5%
 pub const LLM_MARKUP_BP: u64 = 500;
 
@@ -104,6 +110,10 @@ pub enum ProtocolFeeType {
     DidRegistration,
     EscrowSettlement,
     StakingYieldCut,
+    /// 5 VIRTUAL flat fee when a funding pool is created
+    PoolCreation,
+    /// 5% of job budget charged when creator accepts an application
+    MarketplaceSettle,
 }
 
 /// Billing ledger tracking all API usage and protocol fees.
@@ -224,6 +234,28 @@ impl BillingLedger {
         let fee = amount * ESCROW_SETTLEMENT_FEE_BP / 10_000;
         self.record_protocol_fee(
             ProtocolFeeType::EscrowSettlement,
+            fee,
+            payer,
+            timestamp_ms,
+        )
+    }
+
+    /// Charge pool creation fee (5 VIRTUAL flat → 100% treasury).
+    pub fn charge_pool_creation(&mut self, payer: &str, timestamp_ms: u64) -> u64 {
+        self.record_protocol_fee(
+            ProtocolFeeType::PoolCreation,
+            POOL_CREATION_FEE_VIRTUAL,
+            payer,
+            timestamp_ms,
+        )
+    }
+
+    /// Charge marketplace settlement fee (5% of job budget → 100% treasury).
+    /// Called when the job creator accepts an application.
+    pub fn charge_marketplace_settlement(&mut self, payer: &str, budget_virtual: u64, timestamp_ms: u64) -> u64 {
+        let fee = budget_virtual * MARKETPLACE_FEE_BP / 10_000;
+        self.record_protocol_fee(
+            ProtocolFeeType::MarketplaceSettle,
             fee,
             payer,
             timestamp_ms,

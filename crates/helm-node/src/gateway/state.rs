@@ -183,14 +183,22 @@ pub struct MarketplacePost {
     pub post_type: PostType,
     pub title: String,
     pub description: String,
-    /// Budget in BNKR micro-units
+    /// Budget in BNKR micro-units (legacy display field)
     pub budget_bnkr: u64,
+    /// Budget in VIRTUAL micro-units for on-chain settlement.
+    /// If > 0: creator pays budget + 5% Helm fee on acceptance.
+    /// If 0: listing only — settlement is off-chain.
+    #[serde(default)]
+    pub budget_virtual: u64,
     pub creator_did: String,
     /// If linked to a pool (e.g. human wanted for pool)
     pub pool_id: Option<String>,
     pub status: PostStatus,
     pub created_at_ms: u64,
     pub applications: Vec<Application>,
+    /// DID of the accepted applicant (set on acceptance)
+    #[serde(default)]
+    pub accepted_applicant_did: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -252,6 +260,18 @@ pub struct ApiCallRecord {
     pub created_at_ms: u64,
 }
 
+// ── DID Exchange session tokens ────────────────────────────────────────────
+
+/// A session token record issued after DID exchange (BYOK).
+/// Allows agents to authenticate without repeating Ed25519 signatures for 30 days.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRecord {
+    /// The internal did:helm:xxx this token resolves to
+    pub local_did: String,
+    /// Unix ms expiry (default: 30 days from issuance)
+    pub expires_at_ms: u64,
+}
+
 // ── G-metric session cache (per-DID Attention Engine) ─────────────────────
 
 pub type AttentionCache = HashMap<String, (HelmAttentionEngine, usize)>;
@@ -301,6 +321,15 @@ pub struct AppState {
     /// x402 topup: set of already-credited tx hashes (replay protection).
     pub topup_txs: Arc<RwLock<HashSet<String>>>,
 
+    /// DID bridge: global_did (e.g. did:ethr:0xABC) → local did:helm:xxx
+    /// Populated by POST /v1/auth/exchange (BYOK flow).
+    pub did_mappings: Arc<RwLock<HashMap<String, String>>>,
+
+    /// Session tokens issued after DID exchange.
+    /// Token → SessionRecord { local_did, expires_at_ms }
+    /// Auth middleware checks this before requiring a DID bearer token.
+    pub session_tokens: Arc<RwLock<HashMap<String, SessionRecord>>>,
+
     /// Gateway start timestamp
     pub started_at_ms: u64,
 }
@@ -336,6 +365,8 @@ impl AppState {
             rate_limits: Arc::new(RwLock::new(HashMap::new())),
             boot_timestamps: Arc::new(RwLock::new(Vec::new())),
             topup_txs: Arc::new(RwLock::new(HashSet::new())),
+            did_mappings: Arc::new(RwLock::new(HashMap::new())),
+            session_tokens: Arc::new(RwLock::new(HashMap::new())),
             started_at_ms: now_ms(),
         }
     }
