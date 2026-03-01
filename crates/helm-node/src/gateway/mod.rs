@@ -23,7 +23,7 @@
 //!   │  G-Line: Sync-O        → helm-engine GRG pipeline          │
 //!   │  E-Line: Sense Memory  → helm-store TieredCache/LWW CRDT   │
 //!   │  D-Line: Helm Score    → helm-identity ReputationScore      │
-//!   │  Pool:   HelmPool      → helm-token X.402 + StakePool      │
+//!   │  Pool:   HelmPool      → VIRTUAL ledger + StakePool         │
 //!   │  Graph:  Earnings      → billing.rs referral tracking       │
 //!   └────────────────────────────────────────────────────────────┘
 //! ```

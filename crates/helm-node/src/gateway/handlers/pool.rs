@@ -5,8 +5,11 @@
 //!
 //! ## Design notes
 //!
-//! 1. The X.402 escrow in helm-token is ALREADY BUILT — pool contributions
-//!    should use the existing escrow state machine rather than a simple counter.
+//! 1. Pool contributions use the VIRTUAL ledger (simple counter backed by real
+//!    BNKR/USDC on-chain topups via helm-node/src/gateway/x402.rs).
+//!    The `helm-token/src/x402.rs` inMemory escrow is SIMULATION ONLY and
+//!    is NOT connected to this pool. If trustless on-chain pool escrow is
+//!    needed in the future, a QkvgEscrow.sol on Base would be the path.
 //!
 //! 2. The treasury.rs CapitalPool bucket is literally built for this purpose:
 //!    "External project financing." Pool monthly costs should flow through here.

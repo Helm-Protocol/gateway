@@ -1,11 +1,42 @@
-//! x402 Agent-to-Agent Payment Protocol — escrow, verification, settlement.
+//! x402 Agent-to-Agent Payment Protocol — **IN-MEMORY SIMULATION ONLY**.
 //!
-//! Enables trustless payments between autonomous agents. A buyer agent
-//! locks funds in escrow, a seller agent performs work, an optional
-//! verifier agent checks quality, and funds are released on success
-//! or refunded on failure/timeout.
+//! ⚠️  THIS MODULE IS NOT CONNECTED TO ANY REAL PAYMENT PATH. ⚠️
 //!
-//! State machine:
+//! ## What this is
+//!
+//! A pure in-memory prototype of an escrow state machine, used for:
+//! - Unit tests and simulation scenarios (`helm-token` test suite)
+//! - Design reference for future on-chain QkvgEscrow.sol (if needed)
+//!
+//! ## What the REAL payment flows are
+//!
+//! 1. **BNKR/USDC topup → VIRTUAL balance**
+//!    `helm-node/src/gateway/x402.rs` verifies on-chain transfers via Base RPC.
+//!    BNKR: `0x22af33fe49fd1fa80c7149773dde5890d3c76f3b`
+//!    USDC: `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`
+//!    Jay treasury: `0x7e0118A33202c03949167853b05631baC0fA9756`
+//!
+//! 2. **Marketplace escrow (VIRTUAL ledger)**
+//!    `handle_accept_application()` in `handlers/marketplace.rs` is the real
+//!    escrow mechanism: buyer's `budget_virtual` is deducted on accept,
+//!    plus a 5% protocol fee to Jay treasury. Settlement is instant and
+//!    backed by the BNKR/USDC topup above.
+//!
+//! ## Known issues in THIS simulation (do not use in production)
+//!
+//! - DJB2 hash for escrow IDs (not cryptographic — collision risk)
+//! - Double-spend bug: vault not deducted on `settle` or `refund`
+//! - No verifier or resolver authentication
+//! - No persistence — all state lost on process restart
+//! - `fee_collector = Address::genesis()` (not Jay's address)
+//!
+//! ## If you want on-chain marketplace escrow
+//!
+//! A Solidity `QkvgEscrow.sol` would hold `budget_virtual`-equivalent BNKR
+//! on Base, releasing to agent on successful job completion verified by
+//! a multisig or ZK proof. This is a future design decision.
+//!
+//! State machine (simulation):
 //! ```text
 //! Created → Funded → WorkSubmitted → Verified → Settled
 //!                  ↘ Expired         ↘ Disputed → Resolved

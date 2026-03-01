@@ -17,8 +17,11 @@
 //!
 //! ## The Trust Transaction Use Case (v3.0)
 //!
-//! Score ≥ 750 (PRIME): trade without escrow (direct X.402 settlement)
-//! Score < 750: require X.402 escrow (already built in helm-token)
+//! Score ≥ 750 (PRIME): direct settlement via handle_accept_application()
+//! Score < 750: same flow, but future versions may add extra verification step
+//!
+//! Note: `helm-token/src/x402.rs` is SIMULATION ONLY (inMemory, not connected
+//! to production). The real escrow is the VIRTUAL ledger in handle_accept_application().
 //!
 //! This saves the escrow fee (2% of transaction value) for PRIME agents,
 //! creating a strong incentive to maintain reputation.
