@@ -1,12 +1,25 @@
-//! POST /v1/payment/topup — x402 USDC → VIRTUAL balance topup.
+//! POST /v1/payment/topup — x402 BNKR (primary) or USDC (secondary) → VIRTUAL balance.
+//!
+//! ## Payment Asset Strategy
+//!
+//! | Agent type              | Recommended flow                                     |
+//! |-------------------------|------------------------------------------------------|
+//! | BNKR holder             | Send BNKR directly → topup { currency: "BNKR" }     |
+//! | USDC holder             | Send USDC directly → topup { currency: "USDC" }     |
+//! | VIRTUAL holder          | Swap VIRTUAL→BNKR on Aerodrome → pay BNKR           |
+//! | AI agent (no wallet)    | Pool operator sends on behalf; use shared pool       |
+//!
+//! BNKR is preferred because it supports EIP-3009 (transferWithAuthorization),
+//! enabling the Coinbase x402 Facilitator pattern (gasless for the agent).
 //!
 //! ## Flow
 //! 1. POST {} or {"tx_hash": null} → 402 with payment requirements.
-//! 2. Client sends USDC to treasury on Base mainnet (direct EOA transfer).
-//! 3. POST {"tx_hash": "0x..."} → gateway verifies on-chain → credits VIRTUAL.
+//! 2. Client sends BNKR (primary) or USDC to treasury on Base mainnet.
+//! 3. POST {"tx_hash": "0x...", "currency": "BNKR"} → gateway verifies, credits VIRTUAL.
 //!
 //! ## Pricing
-//! 1 USDC (Base mainnet) = 1.538 VIRTUAL. Minimum: 0.50 USDC.
+//! - BNKR: 1,000 BNKR ≈ $0.55 → ~0.846 VIRTUAL. Min: 500 BNKR.
+//! - USDC: 1 USDC → 1.538 VIRTUAL. Min: 0.50 USDC.
 //!
 //! ## Replay Protection
 //! Each tx_hash can only be used once (tracked in AppState.topup_txs).
@@ -18,13 +31,16 @@ use serde_json::json;
 use crate::gateway::auth::CallerDid;
 use crate::gateway::state::AppState;
 use crate::gateway::x402::{
-    base_rpc_url, payment_required_response, usdc_to_virtual_micro, verify_usdc_topup,
-    VerifyError, TREASURY_ADDRESS, USDC_CONTRACT_BASE,
+    base_rpc_url, bnkr_contract_base, bnkr_whole_to_virtual_micro, payment_required_response,
+    usdc_to_virtual_micro, verify_bnkr_topup, verify_usdc_topup, VerifyError, TREASURY_ADDRESS,
+    USDC_CONTRACT_BASE,
 };
 
 #[derive(Deserialize)]
 pub struct TopupRequest {
     pub tx_hash: Option<String>,
+    /// Payment currency: "BNKR" (preferred) | "USDC" | null (auto-detect: BNKR first, then USDC)
+    pub currency: Option<String>,
 }
 
 pub async fn handle_topup(
@@ -62,37 +78,60 @@ pub async fn handle_topup(
         }
     }
 
-    // Verify USDC transfer to treasury on Base mainnet
     let rpc_url = base_rpc_url();
-    let usdc_amount = verify_usdc_topup(tx_hash, &rpc_url)
-        .await
-        .map_err(|e| {
-            let (status, code) = match &e {
-                VerifyError::InvalidHash => (StatusCode::BAD_REQUEST, "invalid_tx_hash"),
-                VerifyError::TxNotFound => (StatusCode::NOT_FOUND, "tx_not_found"),
-                VerifyError::TxFailed => (StatusCode::UNPROCESSABLE_ENTITY, "tx_failed_on_chain"),
-                VerifyError::NoQualifyingTransfer => {
-                    (StatusCode::UNPROCESSABLE_ENTITY, "no_usdc_transfer_to_treasury")
-                }
-                VerifyError::BelowMinimum(_) => {
-                    (StatusCode::UNPROCESSABLE_ENTITY, "amount_below_minimum")
-                }
-                VerifyError::RpcError(_) => (StatusCode::BAD_GATEWAY, "rpc_error"),
-            };
-            (
-                status,
-                Json(json!({
-                    "error": code,
-                    "detail": e.to_string(),
-                    "treasury": TREASURY_ADDRESS,
-                    "asset": USDC_CONTRACT_BASE,
-                    "network": "base-mainnet",
-                    "minimum_usdc": "0.50"
-                })),
-            )
-        })?;
+    let currency = req.currency.as_deref().unwrap_or("auto").to_uppercase();
 
-    let virtual_credited = usdc_to_virtual_micro(usdc_amount);
+    // Determine which asset to verify, and convert to VIRTUAL
+    let (virtual_credited, asset_name, asset_amount_display) = match currency.as_str() {
+        "BNKR" => {
+            let bnkr_contract = bnkr_contract_base().ok_or_else(|| (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "error": "bnkr_not_configured",
+                    "message": "BNKR payments require HELM_BNKR_CONTRACT env var to be set.",
+                    "fallback": "Use currency: \"USDC\" instead."
+                })),
+            ))?;
+            let bnkr_whole = verify_bnkr_topup(tx_hash, &rpc_url, &bnkr_contract)
+                .await
+                .map_err(|e| map_verify_error(&e, "BNKR", &bnkr_contract))?;
+            let credited = bnkr_whole_to_virtual_micro(bnkr_whole);
+            (credited, "BNKR", format!("{bnkr_whole} BNKR"))
+        }
+        "USDC" => {
+            let usdc_amount = verify_usdc_topup(tx_hash, &rpc_url)
+                .await
+                .map_err(|e| map_verify_error(&e, "USDC", USDC_CONTRACT_BASE))?;
+            let credited = usdc_to_virtual_micro(usdc_amount);
+            (credited, "USDC", format!("{:.6} USDC", usdc_amount as f64 / 1_000_000.0))
+        }
+        _ => {
+            // AUTO: try BNKR first (if configured), then USDC
+            if let Some(bnkr_contract) = bnkr_contract_base() {
+                match verify_bnkr_topup(tx_hash, &rpc_url, &bnkr_contract).await {
+                    Ok(bnkr_whole) => {
+                        let credited = bnkr_whole_to_virtual_micro(bnkr_whole);
+                        (credited, "BNKR", format!("{bnkr_whole} BNKR"))
+                    }
+                    Err(_) => {
+                        // BNKR failed, try USDC
+                        let usdc_amount = verify_usdc_topup(tx_hash, &rpc_url)
+                            .await
+                            .map_err(|e| map_verify_error(&e, "USDC", USDC_CONTRACT_BASE))?;
+                        let credited = usdc_to_virtual_micro(usdc_amount);
+                        (credited, "USDC", format!("{:.6} USDC", usdc_amount as f64 / 1_000_000.0))
+                    }
+                }
+            } else {
+                // BNKR not configured — USDC only
+                let usdc_amount = verify_usdc_topup(tx_hash, &rpc_url)
+                    .await
+                    .map_err(|e| map_verify_error(&e, "USDC", USDC_CONTRACT_BASE))?;
+                let credited = usdc_to_virtual_micro(usdc_amount);
+                (credited, "USDC", format!("{:.6} USDC", usdc_amount as f64 / 1_000_000.0))
+            }
+        }
+    };
 
     // Mark tx as used before crediting (prevents double-spend under concurrent requests)
     state.topup_txs.write().await.insert(tx_hash.to_string());
@@ -115,14 +154,53 @@ pub async fn handle_topup(
         }
     };
 
+    tracing::info!(
+        "Topup: did={} currency={} paid={} virtual_credited={} new_balance={}",
+        caller_did, asset_name, asset_amount_display, virtual_credited, new_balance
+    );
+
     Ok(Json(json!({
         "ok": true,
         "tx_hash": tx_hash,
-        "usdc_paid_6dec": usdc_amount,
+        "currency": asset_name,
+        "paid": asset_amount_display,
         "virtual_credited": virtual_credited,
         "new_balance": new_balance,
-        "rate": "1 USDC = 1.538 VIRTUAL",
+        "rate": if asset_name == "BNKR" {
+            "1,000 BNKR ≈ 0.846 VIRTUAL"
+        } else {
+            "1 USDC = 1.538 VIRTUAL"
+        },
         "treasury": TREASURY_ADDRESS,
         "network": "base-mainnet"
     })))
+}
+
+/// Map VerifyError to an HTTP error response with asset-specific context.
+fn map_verify_error(
+    e: &VerifyError,
+    asset: &str,
+    contract: &str,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let (status, code) = match e {
+        VerifyError::InvalidHash => (StatusCode::BAD_REQUEST, "invalid_tx_hash"),
+        VerifyError::TxNotFound => (StatusCode::NOT_FOUND, "tx_not_found"),
+        VerifyError::TxFailed => (StatusCode::UNPROCESSABLE_ENTITY, "tx_failed_on_chain"),
+        VerifyError::NoQualifyingTransfer => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "no_transfer_to_treasury")
+        }
+        VerifyError::BelowMinimum(_) => (StatusCode::UNPROCESSABLE_ENTITY, "amount_below_minimum"),
+        VerifyError::RpcError(_) => (StatusCode::BAD_GATEWAY, "rpc_error"),
+    };
+    (
+        status,
+        Json(json!({
+            "error": code,
+            "detail": e.to_string(),
+            "asset": asset,
+            "contract": contract,
+            "treasury": TREASURY_ADDRESS,
+            "network": "base-mainnet",
+        })),
+    )
 }
