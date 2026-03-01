@@ -33,6 +33,11 @@ pub const TREASURY_ADDRESS: &str = "0x7e0118A33202c03949167853b05631baC0fA9756";
 /// USDC contract on Base mainnet.
 pub const USDC_CONTRACT_BASE: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
+/// BankrCoin (BNKR) official contract on Base mainnet.
+/// EIP-3009 supported — Coinbase x402 Facilitator works directly (gasless transferWithAuthorization).
+/// Source: https://basescan.org/token/0x22af33fe49fd1fa80c7149773dde5890d3c76f3b
+pub const BNKR_CONTRACT_BASE: &str = "0x22af33fe49fd1fa80c7149773dde5890d3c76f3b";
+
 /// Base mainnet chain ID.
 pub const BASE_CHAIN_ID: u64 = 8453;
 
@@ -65,10 +70,11 @@ const BNKR_USD: f64 = 0.00055;
 const VIRTUAL_USD: f64 = 0.65;
 
 /// Get the BNKR contract address on Base mainnet from env var.
-/// Set `HELM_BNKR_CONTRACT` to the verified BNKR contract address.
-/// If unset, BNKR topup is disabled (402 response will only show USDC option).
+/// Returns the BNKR contract address on Base mainnet.
+/// Defaults to the official BankrCoin address; overridable via `HELM_BNKR_CONTRACT` env var.
 pub fn bnkr_contract_base() -> Option<String> {
-    std::env::var("HELM_BNKR_CONTRACT").ok()
+    Some(std::env::var("HELM_BNKR_CONTRACT")
+        .unwrap_or_else(|_| BNKR_CONTRACT_BASE.to_string()))
 }
 
 /// Get Base RPC URL from env var `HELM_BASE_RPC_URL`, or use the public default.

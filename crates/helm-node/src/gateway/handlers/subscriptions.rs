@@ -2,12 +2,11 @@
 //!
 //! ## Tiers
 //!
-//! | Tier            | Price       | Marketplace posts | Benefits                              |
-//! |-----------------|-------------|-------------------|---------------------------------------|
-//! | AlphaHunt       | 50V/month   | Unlimited         | Alpha Hunt bundle included, 10V/call  |
-//! | ProtocolShield  | 100V/month  | Unlimited         | Protocol Shield bundle, B2B rate card |
-//! | SovereignAgent  | 200V/month  | Unlimited         | All lines, priority routing, escrow   |
-//! |                 |             |                   | exempt pre-approval pathway           |
+//! | Tier            | Price        | USD equiv | Marketplace | Benefits                            |
+//! |-----------------|--------------|-----------|-------------|-------------------------------------|
+//! | AlphaHunt       | 200V/month   | ~$130     | Unlimited   | Alpha Hunt bundle, G-score filter   |
+//! | ProtocolShield  | 300V/month   | ~$195     | Unlimited   | Protocol Shield, B2B rate card      |
+//! | SovereignAgent  | 750V/month   | ~$487     | Unlimited   | All lines, priority, escrow-exempt  |
 //!
 //! Free tier: 3 marketplace posts max, pay-per-call only.
 //!

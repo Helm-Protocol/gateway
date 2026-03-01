@@ -2414,17 +2414,23 @@ mod gateway_tests {
 
         assert_eq!(status, StatusCode::PAYMENT_REQUIRED, "Must return 402: {resp}");
         assert_eq!(resp["x402Version"].as_u64().unwrap(), 1);
-        assert!(resp["accepts"].is_array());
-        let opt = &resp["accepts"][0];
-        assert_eq!(opt["network"], "base-mainnet");
-        assert_eq!(
-            opt["payTo"],
-            "0x7e0118A33202c03949167853b05631baC0fA9756",
-            "Treasury address must match Jay's wallet"
-        );
-        assert_eq!(opt["asset"], "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-            "USDC on Base mainnet");
-        assert_eq!(opt["extra"]["decimals"].as_u64().unwrap(), 6);
+        let accepts = resp["accepts"].as_array().expect("accepts must be array");
+        assert!(!accepts.is_empty(), "Must offer at least one payment option");
+
+        // BNKR is now the primary option (EIP-3009 supported = Coinbase Facilitator compatible)
+        let bnkr_opt = accepts.iter().find(|o| o["extra"]["name"] == "BNKR")
+            .expect("BNKR option must be present");
+        assert_eq!(bnkr_opt["network"], "base-mainnet");
+        assert_eq!(bnkr_opt["payTo"], "0x7e0118A33202c03949167853b05631baC0fA9756");
+        assert_eq!(bnkr_opt["asset"], "0x22af33fe49fd1fa80c7149773dde5890d3c76f3b", "BankrCoin on Base");
+        assert_eq!(bnkr_opt["extra"]["decimals"].as_u64().unwrap(), 18);
+        assert_eq!(bnkr_opt["extra"]["eip3009"], true, "BNKR must advertise EIP-3009 support");
+
+        // USDC is secondary option (always present)
+        let usdc_opt = accepts.iter().find(|o| o["extra"]["name"] == "USD Coin")
+            .expect("USDC option must always be present");
+        assert_eq!(usdc_opt["asset"], "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
+        assert_eq!(usdc_opt["extra"]["decimals"].as_u64().unwrap(), 6);
     }
 
     /// POST /v1/payment/topup with explicit null tx_hash → 402.

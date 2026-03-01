@@ -68,10 +68,21 @@ pub const POOL_CONTRIBUTION_FEE_BP: u64 = 300;
 /// This is paid from the contribution (agent pays stake, 20% credited to creator, 80% to pool).
 pub const POOL_CREATOR_CUT_BP: u64 = 2_000;
 
-/// Package subscription prices (VIRTUAL micro-units per month)
-pub const PACKAGE_ALPHA_HUNT_MONTHLY: u64   =  50_000_000; // 50 VIRTUAL/month
-pub const PACKAGE_PROTOCOL_SHIELD_MONTHLY: u64 = 100_000_000; // 100 VIRTUAL/month
-pub const PACKAGE_SOVEREIGN_MONTHLY: u64    = 200_000_000; // 200 VIRTUAL/month (all-lines)
+/// Package subscription prices (VIRTUAL micro-units per month).
+///
+/// Pricing rationale (1 VIRTUAL ≈ $0.65 USD at 1 USDC → 1.538 VIRTUAL):
+///
+/// | Tier            | VIRTUAL/mo | USD equiv | Comparable market product  |
+/// |-----------------|-----------|-----------|---------------------------|
+/// | AlphaHunt       |  200V     |  ~$130    | Nansen Pro ($150/mo)      |
+/// | ProtocolShield  |  300V     |  ~$195    | B2B data hygiene APIs     |
+/// | SovereignAgent  |  750V     |  ~$487    | Full agent infra platform |
+///
+/// These are LAUNCH prices — priced to attract first 100 agents while signaling value.
+/// Free tier: 5V welcome credits → 3 marketplace posts → trial, no subscription required.
+pub const PACKAGE_ALPHA_HUNT_MONTHLY: u64      = 200_000_000; // 200 VIRTUAL/month (~$130)
+pub const PACKAGE_PROTOCOL_SHIELD_MONTHLY: u64 = 300_000_000; // 300 VIRTUAL/month (~$195)
+pub const PACKAGE_SOVEREIGN_MONTHLY: u64       = 750_000_000; // 750 VIRTUAL/month (~$487)
 
 /// A-Front (LLM proxy) markup over cost: 5%
 pub const LLM_MARKUP_BP: u64 = 500;
