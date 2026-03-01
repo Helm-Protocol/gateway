@@ -29,6 +29,7 @@
 //! ```
 
 pub mod auth;
+pub mod db;
 pub mod handlers;
 pub mod pricing;
 pub mod server;

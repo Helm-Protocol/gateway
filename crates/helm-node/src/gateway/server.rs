@@ -23,6 +23,7 @@
 //!   GET    /v1/pool                    → List all pools
 //!   GET    /v1/pool/:id                → Pool status
 //!   POST   /v1/pool/:id/join           → Join pool with stake
+//!   POST   /v1/pool/:id/claim-operator → Human claims operator role (Pool moat)
 //!
 //! ### Marketplace (agent-initiated)
 //!   POST   /v1/marketplace/post        → Create job / subcontract / HumanContractPrincipal post
@@ -62,7 +63,7 @@ use crate::gateway::handlers::{
     marketplace::{handle_apply, handle_create_post, handle_list_posts},
     memory::{handle_memory_del, handle_memory_get, handle_memory_list, handle_memory_put},
     packages::{handle_alpha_hunt, handle_protocol_shield},
-    pool::{handle_create_pool, handle_join_pool, handle_list_pools, handle_pool_status},
+    pool::{handle_claim_operator, handle_create_pool, handle_join_pool, handle_list_pools, handle_pool_status},
     synco::{handle_synco, handle_synco_decode},
 };
 use crate::gateway::state::AppState;
@@ -124,7 +125,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/pool",                  post(handle_create_pool))
         .route("/v1/pool",                  get(handle_list_pools))
         .route("/v1/pool/:id",              get(handle_pool_status))
-        .route("/v1/pool/:id/join",         post(handle_join_pool))
+        .route("/v1/pool/:id/join",            post(handle_join_pool))
+        .route("/v1/pool/:id/claim-operator", post(handle_claim_operator))
         // Marketplace (manual agent-initiated posts)
         .route("/v1/marketplace/post",      post(handle_create_post))
         .route("/v1/marketplace/post",      get(handle_list_posts))

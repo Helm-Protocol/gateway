@@ -39,6 +39,22 @@ axum = { version = "0.7", features = ["macros"] }
 tower-http = { version = "0.5", features = ["cors", "trace", "limit", "set-header"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 tokio-util = { version = "0.7" }
+# PostgreSQL persistence (optional — enabled via `--features postgres`)
+# In-memory mode is the default (tests always use in-memory).
+sqlx = { version = "0.8", features = [
+    "runtime-tokio-rustls",
+    "postgres",
+    "uuid",
+    "json",
+    "chrono",
+    "macros",
+], optional = true }
+
+[features]
+# Enable PostgreSQL backend (requires DATABASE_URL env var at runtime).
+# `cargo build --features postgres` to compile with PostgreSQL support.
+# Tests always run without this feature to keep them fast and dependency-free.
+postgres = ["dep:sqlx"]
 
 [dev-dependencies]
 serde_json = { workspace = true }

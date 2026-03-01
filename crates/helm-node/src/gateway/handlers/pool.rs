@@ -31,8 +31,8 @@ use uuid::Uuid; // used for pool_id generation
 use crate::gateway::auth::CallerDid;
 use crate::gateway::pricing::VIRTUAL_UNIT;
 use crate::gateway::state::{
-    AppState, FundingPool, PoolMember,
-    PoolStatus, now_ms,
+    AppState, BondType, FundingPool, IdentityBondRecord,
+    PackageTier, PoolMember, PoolStatus, now_ms,
 };
 
 // ── Create Pool ────────────────────────────────────────────────────────────
@@ -130,6 +130,13 @@ pub async fn handle_create_pool(
         });
     }
 
+    // Auto-transition to AwaitingOperator if initial contribution fully funds the pool.
+    let initial_status = if initial >= req.bnkr_goal {
+        PoolStatus::AwaitingOperator
+    } else {
+        PoolStatus::Fundraising
+    };
+
     let pool = FundingPool {
         pool_id: pool_id.clone(),
         name: req.name.clone(),
@@ -137,7 +144,7 @@ pub async fn handle_create_pool(
         monthly_cost_usd: req.monthly_cost_usd,
         bnkr_goal: req.bnkr_goal,
         bnkr_collected: initial,
-        status: PoolStatus::Fundraising,
+        status: initial_status,
         creator_did: did.clone(),
         human_operator_did: None,
         members,
@@ -170,6 +177,7 @@ pub async fn handle_create_pool(
     let safe_name = req.name.replace(['\r', '\n', '\0'], "_");
     tracing::info!("Pool created: {} name={} vendor={} goal={} by={}", pool_id, safe_name, safe_vendor, req.bnkr_goal, did);
 
+    let final_status = if initial >= req.bnkr_goal { "AwaitingOperator" } else { "Fundraising" };
     Ok((StatusCode::CREATED, Json(CreatePoolResponse {
         pool_id,
         name: req.name,
@@ -177,13 +185,18 @@ pub async fn handle_create_pool(
         monthly_cost_usd: req.monthly_cost_usd,
         bnkr_goal: req.bnkr_goal,
         bnkr_collected: initial,
-        status: "Fundraising".to_string(),
+        status: final_status.to_string(),
         creator_did: did,
         progress_pct,
         created_at_ms: now,
         message: format!(
-            "Pool created. {:.1}% funded. Use POST /v1/marketplace/post to recruit a human operator when ready.",
-            progress_pct
+            "Pool created. {:.1}% funded. {}",
+            progress_pct,
+            if initial >= req.bnkr_goal {
+                "Pool fully funded! Use POST /v1/pool/<id>/claim-operator to assign a human operator."
+            } else {
+                "Use POST /v1/marketplace/post to recruit a human operator when ready."
+            }
         ),
     })))
 }
@@ -399,4 +412,172 @@ pub async fn handle_pool_status(
         "human_wanted_post_id": pool.human_wanted_post_id,
         "created_at_ms": pool.created_at_ms,
     })))
+}
+
+// ── Claim Operator (Human Contract Principal model) ─────────────────────────
+//
+// POST /v1/pool/:id/claim-operator
+//
+// This is the key endpoint that enables the "agent hires human" model:
+//
+//   1. Agents create pool + fund it collectively (BNKR staked in escrow).
+//   2. Pool reaches 100% → status = AwaitingOperator.
+//   3. Agent posts a HumanContractPrincipal job via /v1/marketplace/post.
+//   4. A human (is_human_operator=true) calls this endpoint to claim
+//      the operator role — agrees to sign the API contract with the vendor.
+//   5. Pool transitions to PendingContract.
+//   6. Human signs the vendor contract (off-chain), submits API key via
+//      PATCH /v1/pool/:id/api-key (future endpoint — encrypted at rest).
+//   7. Pool transitions to Active → API credits distributed monthly.
+//
+// The HumanOperator IdentityBond issued here is the Pool moat mechanism:
+//   - The bond is tied to the agent's DID (history, reputation)
+//   - A human with an active HumanOperator bond earns 300 VIRTUAL/month
+//   - Revoking the bond requires pool consensus (future: governance vote)
+
+#[derive(Debug, Deserialize)]
+pub struct ClaimOperatorRequest {
+    /// Confirms the human has read and agrees to the pool's terms.
+    #[serde(default)]
+    pub accept_terms: bool,
+    /// Optional note to pool members (max 512 chars).
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClaimOperatorResponse {
+    pub pool_id: String,
+    pub operator_did: String,
+    pub bond_id: String,
+    pub pool_status: String,
+    pub monthly_reward_virtual: u64,
+    pub message: String,
+}
+
+/// Monthly reward to human operator for contract management (300 VIRTUAL).
+const OPERATOR_MONTHLY_REWARD: u64 = 300 * crate::gateway::pricing::VIRTUAL_UNIT;
+
+pub async fn handle_claim_operator(
+    State(state): State<AppState>,
+    Extension(CallerDid(did)): Extension<CallerDid>,
+    Path(pool_id): Path<String>,
+    Json(req): Json<ClaimOperatorRequest>,
+) -> Result<Json<ClaimOperatorResponse>, (StatusCode, Json<serde_json::Value>)> {
+    // Must explicitly accept terms
+    if !req.accept_terms {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({
+            "error": "terms_not_accepted",
+            "message": "Set accept_terms: true to confirm you will sign the vendor API contract."
+        }))));
+    }
+
+    // Validate note length
+    if let Some(ref note) = req.note {
+        if note.len() > 512 {
+            return Err((StatusCode::BAD_REQUEST, Json(json!({
+                "error": "note_too_long",
+                "max_chars": 512
+            }))));
+        }
+    }
+
+    // Check caller is marked as a human operator candidate
+    // (is_human_operator flag is set via admin endpoint or GitHub OAuth verification)
+    {
+        let agents = state.agents.read().await;
+        let agent = agents.get(&did).ok_or_else(|| (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "agent_not_found"})),
+        ))?;
+
+        if !agent.is_human_operator {
+            return Err((StatusCode::FORBIDDEN, Json(json!({
+                "error": "not_human_operator",
+                "message": "Only agents marked as human operators can claim pool operator roles. Complete GitHub OAuth verification first.",
+                "hint": "POST /v1/agent/boot with github_login to register, or contact admin."
+            }))));
+        }
+    }
+
+    // Check pool exists and is awaiting an operator
+    let pool_snapshot = {
+        let pools = state.pools.read().await;
+        pools.get(&pool_id).cloned().ok_or_else(|| (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "pool_not_found", "pool_id": pool_id})),
+        ))?
+    };
+
+    if pool_snapshot.status != PoolStatus::AwaitingOperator {
+        return Err((StatusCode::CONFLICT, Json(json!({
+            "error": "pool_not_awaiting_operator",
+            "current_status": format!("{:?}", pool_snapshot.status),
+            "message": "Pool must be fully funded and awaiting an operator. Current status does not allow claiming."
+        }))));
+    }
+
+    // Check no operator already claimed (race condition guard)
+    if pool_snapshot.human_operator_did.is_some() {
+        return Err((StatusCode::CONFLICT, Json(json!({
+            "error": "operator_already_assigned",
+            "operator_did": pool_snapshot.human_operator_did,
+        }))));
+    }
+
+    let now = now_ms();
+    let bond_id = uuid::Uuid::new_v4().to_string();
+
+    // Issue HumanOperator IdentityBond to the claiming agent
+    {
+        let mut agents = state.agents.write().await;
+        if let Some(agent) = agents.get_mut(&did) {
+            agent.bonds.push(IdentityBondRecord {
+                bond_id: bond_id.clone(),
+                bond_type: BondType::HumanOperator,
+                metadata: serde_json::json!({
+                    "pool_id": pool_id,
+                    "vendor": pool_snapshot.vendor,
+                    "monthly_cost_usd": pool_snapshot.monthly_cost_usd,
+                    "monthly_reward_virtual": OPERATOR_MONTHLY_REWARD,
+                    "note": req.note,
+                    "claimed_at_ms": now,
+                }),
+                issued_at_ms: now,
+                active: true,
+            });
+        }
+    }
+
+    // Transition pool: AwaitingOperator → PendingContract
+    {
+        let mut pools = state.pools.write().await;
+        if let Some(pool) = pools.get_mut(&pool_id) {
+            pool.human_operator_did = Some(did.clone());
+            pool.status = PoolStatus::PendingContract;
+        }
+    }
+
+    let safe_vendor = pool_snapshot.vendor.replace(['\r', '\n', '\0'], "_");
+    tracing::info!(
+        "Pool operator claimed: pool={} operator={} vendor={}",
+        pool_id, did, safe_vendor
+    );
+
+    Ok(Json(ClaimOperatorResponse {
+        pool_id: pool_id.clone(),
+        operator_did: did,
+        bond_id,
+        pool_status: "PendingContract".to_string(),
+        monthly_reward_virtual: OPERATOR_MONTHLY_REWARD,
+        message: format!(
+            "Operator role claimed for pool '{}' (vendor: {}). \
+             Next: sign the {} API contract and submit the encrypted API key via PATCH /v1/pool/{}/api-key. \
+             You will earn {} VIRTUAL/month.",
+            pool_snapshot.name,
+            pool_snapshot.vendor,
+            pool_snapshot.vendor,
+            pool_id,
+            OPERATOR_MONTHLY_REWARD,
+        ),
+    }))
 }

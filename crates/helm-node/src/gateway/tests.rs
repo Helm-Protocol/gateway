@@ -2189,4 +2189,202 @@ mod gateway_tests {
         assert_eq!(resp["pool_memberships"].as_u64().unwrap_or(99), 1,
             "B should have 1 pool membership from join");
     }
+
+    // ── C42: Human Operator / claim-operator endpoint ─────────────────────────
+
+    /// Helper: POST /v1/pool/:id/claim-operator
+    async fn claim_operator(
+        state: &AppState,
+        did: &str,
+        pool_id: &str,
+        accept: bool,
+    ) -> (StatusCode, Value) {
+        req(
+            state.clone(),
+            Method::POST,
+            &format!("/v1/pool/{}/claim-operator", pool_id),
+            Some(did),
+            Some(json!({"accept_terms": accept})),
+        )
+        .await
+    }
+
+    /// Helper: directly mark an agent as a human operator in state (test only).
+    async fn mark_human_operator(state: &AppState, did: &str) {
+        let mut agents = state.agents.write().await;
+        if let Some(agent) = agents.get_mut(did) {
+            agent.is_human_operator = true;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_attack_c42_claim_operator_terms_required() {
+        // Attempting to claim without accept_terms=true → 400
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+        mark_human_operator(&state, &did).await;
+
+        let (status, resp) = claim_operator(&state, &did, "fake-pool-id", false).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "Should require accept_terms: {resp}");
+        assert_eq!(resp["error"], "terms_not_accepted");
+    }
+
+    #[tokio::test]
+    async fn test_attack_c42_claim_operator_not_human_forbidden() {
+        // Non-human-operator agent trying to claim → 403
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+        // NOT marking as human operator
+
+        let (status, resp) = claim_operator(&state, &did, "fake-pool-id", true).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "Non-human should be forbidden: {resp}");
+        assert_eq!(resp["error"], "not_human_operator");
+    }
+
+    #[tokio::test]
+    async fn test_attack_c42_claim_operator_pool_not_found() {
+        // Human operator claiming a non-existent pool → 404
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+        mark_human_operator(&state, &did).await;
+
+        let (status, resp) = claim_operator(&state, &did, "does-not-exist", true).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "Should be 404: {resp}");
+        assert_eq!(resp["error"], "pool_not_found");
+    }
+
+    #[tokio::test]
+    async fn test_attack_c42_claim_operator_pool_not_awaiting() {
+        // Pool still in Fundraising → cannot claim operator yet → 409
+        let state = AppState::new();
+        let (did_creator, _) = boot(&state, None).await;
+        let (did_human, _) = boot(&state, None).await;
+        mark_human_operator(&state, &did_human).await;
+
+        // Create pool (stays in Fundraising — goal not reached)
+        top_up(&state, &did_creator, 20_000_000).await;
+        let (s, pool_resp) = create_pool(&state, &did_creator, 50.0, 100_000_000).await;
+        assert_eq!(s, StatusCode::CREATED, "Pool create failed: {pool_resp}");
+        let pool_id = pool_resp["pool_id"].as_str().unwrap().to_string();
+
+        let (status, resp) = claim_operator(&state, &did_human, &pool_id, true).await;
+        assert_eq!(status, StatusCode::CONFLICT, "Should reject claim on unfunded pool: {resp}");
+        assert_eq!(resp["error"], "pool_not_awaiting_operator");
+    }
+
+    #[tokio::test]
+    async fn test_attack_c42_claim_operator_success_and_bond_issued() {
+        // Full happy path: pool reaches goal → human claims → bond issued → PendingContract
+        let state = AppState::new();
+        clear_boot_rate(&state).await;
+
+        let (did_creator, _) = boot(&state, None).await;
+        let (did_human, _) = boot(&state, None).await;
+        mark_human_operator(&state, &did_human).await;
+
+        // Creator funds pool to exactly reach goal (small goal for test speed)
+        let goal = 5_000_000u64; // 5 VIRTUAL
+        top_up(&state, &did_creator, 20_000_000).await;
+        let (s, pool_resp) = req(
+            state.clone(),
+            Method::POST,
+            "/v1/pool",
+            Some(&did_creator),
+            Some(json!({
+                "name": "OpenAI Shared Pool",
+                "vendor": "openai",
+                "monthly_cost_usd": 2000.0,
+                "bnkr_goal": goal,
+                "initial_contribution": goal,  // fully fund in one shot
+            })),
+        ).await;
+        assert_eq!(s, StatusCode::CREATED, "Pool create failed: {pool_resp}");
+        let pool_id = pool_resp["pool_id"].as_str().unwrap().to_string();
+
+        // Pool should now be AwaitingOperator
+        let (s, pool_status) = req(
+            state.clone(),
+            Method::GET,
+            &format!("/v1/pool/{}", pool_id),
+            Some(&did_creator),
+            None,
+        ).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(pool_status["status"], "AwaitingOperator",
+            "Fully funded pool should be AwaitingOperator");
+
+        // Human claims operator role
+        let (status, resp) = claim_operator(&state, &did_human, &pool_id, true).await;
+        assert_eq!(status, StatusCode::OK, "Claim operator failed: {resp}");
+        assert_eq!(resp["pool_status"], "PendingContract");
+        assert!(resp["bond_id"].as_str().is_some(), "Bond ID should be returned");
+        assert_eq!(resp["operator_did"], did_human);
+
+        // Verify pool status updated
+        let (s, pool_status) = req(
+            state.clone(),
+            Method::GET,
+            &format!("/v1/pool/{}", pool_id),
+            Some(&did_creator),
+            None,
+        ).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(pool_status["status"], "PendingContract");
+        assert_eq!(pool_status["human_operator_did"], did_human);
+
+        // Verify bond on human's agent record
+        let agents = state.agents.read().await;
+        let human_agent = agents.get(&did_human).unwrap();
+        let operator_bonds: Vec<_> = human_agent.bonds.iter()
+            .filter(|b| matches!(b.bond_type, crate::gateway::state::BondType::HumanOperator))
+            .collect();
+        assert_eq!(operator_bonds.len(), 1, "Human should have 1 HumanOperator bond");
+        assert_eq!(
+            operator_bonds[0].metadata["pool_id"].as_str().unwrap(),
+            pool_id
+        );
+    }
+
+    #[tokio::test]
+    async fn test_attack_c42_claim_operator_idempotent_race() {
+        // Two humans race to claim the same pool → only first succeeds → 409
+        let state = AppState::new();
+        clear_boot_rate(&state).await;
+
+        let (did_creator, _) = boot(&state, None).await;
+        let (did_h1, _) = boot(&state, None).await;
+        let (did_h2, _) = boot(&state, None).await;
+        mark_human_operator(&state, &did_h1).await;
+        mark_human_operator(&state, &did_h2).await;
+
+        // Fund pool to goal
+        let goal = 5_000_000u64;
+        top_up(&state, &did_creator, 20_000_000).await;
+        let (s, pool_resp) = req(
+            state.clone(),
+            Method::POST,
+            "/v1/pool",
+            Some(&did_creator),
+            Some(json!({
+                "name": "RacePool",
+                "vendor": "anthropic",
+                "monthly_cost_usd": 1000.0,
+                "bnkr_goal": goal,
+                "initial_contribution": goal,
+            })),
+        ).await;
+        assert_eq!(s, StatusCode::CREATED);
+        let pool_id = pool_resp["pool_id"].as_str().unwrap().to_string();
+
+        // H1 claims first → succeeds
+        let (s1, _) = claim_operator(&state, &did_h1, &pool_id, true).await;
+        assert_eq!(s1, StatusCode::OK, "H1 should succeed");
+
+        // H2 tries to claim same pool → 409 (pool is now PendingContract, not AwaitingOperator)
+        // The pool status transition (AwaitingOperator → PendingContract) is the guard.
+        let (s2, resp2) = claim_operator(&state, &did_h2, &pool_id, true).await;
+        assert_eq!(s2, StatusCode::CONFLICT, "H2 should fail with 409: {resp2}");
+        assert_eq!(resp2["error"], "pool_not_awaiting_operator",
+            "Pool is PendingContract after H1 claimed — correct rejection for H2");
+    }
 }
