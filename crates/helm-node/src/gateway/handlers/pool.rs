@@ -157,7 +157,7 @@ pub async fn handle_create_pool(
 
     state.pools.write().await.insert(pool_id.clone(), pool);
 
-    // C39: Track pool membership on agent record for O(1) FICO pool scan.
+    // C39: Track pool membership on agent record for O(1) Helm Score pool scan.
     if initial > 0 {
         let mut agents = state.agents.write().await;
         if let Some(agent) = agents.get_mut(&did) {
@@ -297,7 +297,7 @@ pub async fn handle_join_pool(
         return Err(e);
     }
 
-    // C39: Track pool membership on agent record for O(1) FICO pool scan.
+    // C39: Track pool membership on agent record for O(1) Helm Score pool scan.
     {
         let mut agents = state.agents.write().await;
         if let Some(agent) = agents.get_mut(&did) {

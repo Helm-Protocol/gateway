@@ -1,6 +1,6 @@
-//! GET /v1/agent/:did/credit — D-Line: Helm FICO Credit Bureau.
+//! GET /v1/agent/:did/helm-score — D-Line: Helm Score Bureau.
 //!
-//! Returns an agent's credit score (0-850, like FICO) based on:
+//! Returns an agent's Helm Score (300–850) based on:
 //! - API call history (volume and consistency)
 //! - Reputation score from helm-identity
 //! - DID age (older = more trustworthy)
@@ -8,12 +8,11 @@
 //! - Escrow settlement history
 //! - Referral tree depth and volume
 //!
-//! ## What the strategy doc missed
+//! ## Design
 //!
-//! The doc describes D-Line as needing a new "credit bureau" database.
-//! But `helm-identity/src/reputation.rs` already implements ReputationScore
+//! `helm-identity/src/reputation.rs` already implements ReputationScore
 //! with multi-category tracking (Reliability, Quality, ResponseTime,
-//! Community, Governance). The FICO score is just a weighted projection
+//! Community, Governance). The Helm Score is a weighted projection
 //! of the existing reputation data + API usage history.
 //!
 //! ## The Trust Transaction Use Case (v3.0)
@@ -33,13 +32,13 @@ use crate::gateway::pricing::VIRTUAL_UNIT;
 use crate::gateway::state::{AppState, now_ms};
 
 #[derive(Debug, Serialize)]
-pub struct FicoResponse {
+pub struct HelmScoreResponse {
     /// The queried agent DID
     pub did: String,
-    /// FICO-style credit score (300–850)
-    pub score: u32,
+    /// Helm Score (300–850)
+    pub helm_score: u32,
     /// Score band label
-    pub band: CreditBand,
+    pub band: ScoreBand,
     /// Can this agent trade without escrow?
     pub escrow_exempt: bool,
     /// Score breakdown by category
@@ -63,7 +62,7 @@ pub struct FicoResponse {
 }
 
 #[derive(Debug, Serialize)]
-pub enum CreditBand {
+pub enum ScoreBand {
     /// 750–850: PRIME — escrow-exempt (v3.0)
     Excellent,
     /// 700–749: Good — escrow required
@@ -98,22 +97,22 @@ pub struct ScoreBreakdown {
     pub total_raw: u32,
 }
 
-/// Compute FICO-style credit score from agent data.
-fn compute_fico(breakdown: &ScoreBreakdown) -> u32 {
+/// Compute Helm Score from agent data.
+fn compute_helm_score(breakdown: &ScoreBreakdown) -> u32 {
     let raw = breakdown.total_raw;
     // Map raw [0, 900] → [300, 850]
     let score = 300 + (raw as f64 / 900.0 * 550.0) as u32;
     score.min(850)
 }
 
-/// Limit FICO activity score to cap at this many API calls (prevents score farming).
-const FICO_API_CALL_CAP: u64 = 10_000;
+/// Cap activity score at this many API calls (prevents score farming).
+const HELM_SCORE_API_CALL_CAP: u64 = 10_000;
 
-pub async fn handle_fico(
+pub async fn handle_helm_score(
     State(state): State<AppState>,
     Extension(CallerDid(caller_did)): Extension<CallerDid>,
     Path(did): Path<String>,
-) -> Result<Json<FicoResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<HelmScoreResponse>, (StatusCode, Json<serde_json::Value>)> {
     let is_self_query = caller_did == did;
 
     // Verify target DID exists BEFORE charging (don't charge for 404)
@@ -127,7 +126,7 @@ pub async fn handle_fico(
         }
     }
 
-    // Pre-charge 2 VIRTUAL credit bureau query fee
+    // Pre-charge 2 VIRTUAL Helm Score query fee
     let virtual_charged = 2 * VIRTUAL_UNIT;
     state.deduct_balance(&caller_did, virtual_charged).await.map_err(|avail| (
         StatusCode::PAYMENT_REQUIRED,
@@ -135,7 +134,7 @@ pub async fn handle_fico(
             "error": "insufficient_balance",
             "required": virtual_charged,
             "available": avail,
-            "message": "Need at least 2 VIRTUAL to query FICO credit score."
+            "message": "Need at least 2 VIRTUAL to query Helm Score."
         })),
     ))?;
 
@@ -162,7 +161,7 @@ pub async fn handle_fico(
     };
 
     // 2. Activity score (0–200): log-scale of API calls (capped to prevent farming)
-    let api_calls = agent.api_call_count.min(FICO_API_CALL_CAP);
+    let api_calls = agent.api_call_count.min(HELM_SCORE_API_CALL_CAP);
     let activity_score = match api_calls {
         0 => 0,
         1..=9 => 20,
@@ -201,16 +200,15 @@ pub async fn handle_fico(
     };
 
     // 5. Pool score (0–100)
-    // C39: O(1) lookup via agent.pool_ids — avoids O(pools × members) full scan on each FICO call.
+    // C39: O(1) lookup via agent.pool_ids — avoids O(pools × members) full scan.
     let pool_memberships = agent.pool_ids.len();
-
     let pool_score = (pool_memberships as u32 * 33).min(100);
 
     // 6. Bond score (0–50)
     let bond_count = agent.bonds.iter().filter(|b| b.active).count();
     let bond_score = (bond_count as u32 * 25).min(50);
 
-    // 7. Helm reputation (0–50): use api_call_count as proxy (no full reputation system wired yet)
+    // 7. Helm reputation (0–50): weighted projection of reputation score
     let helm_reputation_score = ((agent.reputation.max(0) as f64 / 20.0) as u32).min(50);
 
     let breakdown = ScoreBreakdown {
@@ -225,15 +223,15 @@ pub async fn handle_fico(
             + social_score + pool_score + bond_score + helm_reputation_score,
     };
 
-    let score = compute_fico(&breakdown);
+    let score = compute_helm_score(&breakdown);
 
     let band = match score {
-        750..=850 => CreditBand::Excellent,
-        700..=749 => CreditBand::Good,
-        650..=699 => CreditBand::Fair,
-        600..=649 => CreditBand::Poor,
-        300..=599 => CreditBand::VeryPoor,
-        _ => CreditBand::Unscored,
+        750..=850 => ScoreBand::Excellent,
+        700..=749 => ScoreBand::Good,
+        650..=699 => ScoreBand::Fair,
+        600..=649 => ScoreBand::Poor,
+        300..=599 => ScoreBand::VeryPoor,
+        _ => ScoreBand::Unscored,
     };
 
     // v3.0: PRIME threshold is 750 (escrow-exempt for peer contracts)
@@ -253,15 +251,15 @@ pub async fn handle_fico(
     drop(agents);
 
     // Record the call for tracking (balance was already deducted via pre-charge above)
-    state.record_api_call(&caller_did, "agent/credit", virtual_charged).await;
+    state.record_api_call(&caller_did, "agent/helm-score", virtual_charged).await;
 
     // Non-self queries receive a redacted response:
-    // score, band, escrow_exempt are public (needed for trade decisions).
+    // helm_score, band, escrow_exempt are public (needed for trade decisions).
     // Financial internals (breakdown, max_no_escrow details, spend) are private.
     if !is_self_query {
-        return Ok(Json(FicoResponse {
+        return Ok(Json(HelmScoreResponse {
             did,
-            score,
+            helm_score: score,
             band,
             escrow_exempt,
             breakdown: ScoreBreakdown {
@@ -285,9 +283,9 @@ pub async fn handle_fico(
         }));
     }
 
-    Ok(Json(FicoResponse {
+    Ok(Json(HelmScoreResponse {
         did,
-        score,
+        helm_score: score,
         band,
         escrow_exempt,
         breakdown,

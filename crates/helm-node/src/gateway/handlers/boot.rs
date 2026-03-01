@@ -70,7 +70,7 @@ pub struct BootResponse {
 }
 
 /// Welcome credits given to new agents (in VIRTUAL micro-units).
-/// 5 VIRTUAL — enough for ~2 Cortex + 1 FICO call to explore the platform.
+/// 5 VIRTUAL — enough for ~2 Cortex + 1 Helm Score call to explore the platform.
 /// Reduced from 10V: lower ROI on Sybil farming while remaining useful for genuine signups.
 const WELCOME_CREDITS: u64 = 5 * VIRTUAL_UNIT;
 

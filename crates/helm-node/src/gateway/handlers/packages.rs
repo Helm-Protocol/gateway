@@ -9,7 +9,7 @@
 //! For: Akash, Walrus, Bittensor, Render, IPFS
 //!
 //! ## Trust Transaction (Package 3)
-//! Pipeline: FICO query → score-gated escrow decision
+//! Pipeline: Helm Score query → score-gated escrow decision
 //! For: Any agents trading $500+ with unknown counterparts
 //!
 //! ## What the doc missed

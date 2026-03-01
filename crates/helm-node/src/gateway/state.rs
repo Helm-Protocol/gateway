@@ -3,7 +3,7 @@
 //! All state is in-memory (Arc<RwLock<HashMap<...>>>).
 //! A sqlx PostgreSQL backend can replace these maps in production.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
@@ -66,7 +66,7 @@ pub struct AgentRecord {
     /// Subscribed package tier
     pub package_tier: PackageTier,
     /// Pool IDs this agent is a member of (updated on join/create with initial stake).
-    /// Enables O(1) FICO pool membership count instead of O(pools × members) scan (C39).
+    /// Enables O(1) Helm Score pool membership count instead of O(pools × members) scan (C39).
     #[serde(default)]
     pub pool_ids: Vec<String>,
 }
@@ -298,6 +298,9 @@ pub struct AppState {
     /// Global boot rate: Vec<boot_timestamp_ms> for Sybil protection
     pub boot_timestamps: Arc<RwLock<Vec<u64>>>,
 
+    /// x402 topup: set of already-credited tx hashes (replay protection).
+    pub topup_txs: Arc<RwLock<HashSet<String>>>,
+
     /// Gateway start timestamp
     pub started_at_ms: u64,
 }
@@ -332,6 +335,7 @@ impl AppState {
             api_calls: Arc::new(RwLock::new(Vec::new())),
             rate_limits: Arc::new(RwLock::new(HashMap::new())),
             boot_timestamps: Arc::new(RwLock::new(Vec::new())),
+            topup_txs: Arc::new(RwLock::new(HashSet::new())),
             started_at_ms: now_ms(),
         }
     }

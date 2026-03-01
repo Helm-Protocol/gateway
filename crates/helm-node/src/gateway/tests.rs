@@ -577,25 +577,25 @@ mod gateway_tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // FICO Credit Bureau — [C5]
+    // Helm Score Bureau — [C5] (renamed from FICO)
     // ─────────────────────────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn test_fico_self_gets_full_breakdown() {
+    async fn test_helm_score_self_gets_full_breakdown() {
         let state = AppState::new();
         let (did, _) = boot(&state, None).await;
 
         let (status, resp) = req(
             state,
             Method::GET,
-            &format!("/v1/agent/{}/credit", did),
+            &format!("/v1/agent/{}/helm-score", did),
             Some(&did),
             None,
         )
         .await;
-        assert_eq!(status, StatusCode::OK, "FICO self query failed: {resp}");
+        assert_eq!(status, StatusCode::OK, "Helm Score self query failed: {resp}");
         assert_eq!(resp["did"], did);
-        assert!(resp["score"].is_number(), "Score must be present");
+        assert!(resp["helm_score"].is_number(), "helm_score must be present");
         assert!(resp["band"].is_string(), "Band must be present");
         // Self query: total_api_calls and did_age_days must be real values
         assert!(resp["total_api_calls"].is_number());
@@ -603,12 +603,12 @@ mod gateway_tests {
     }
 
     #[tokio::test]
-    async fn test_attack_c5_fico_other_gets_redacted_breakdown() {
+    async fn test_attack_c5_helm_score_other_gets_redacted_breakdown() {
         let state = AppState::new();
         let (did_a, _) = boot(&state, None).await;
         let (did_b, _) = boot(&state, None).await;
 
-        // A queries B's FICO
+        // A queries B's Helm Score (via legacy /credit alias)
         let (status, resp) = req(
             state,
             Method::GET,
@@ -617,10 +617,10 @@ mod gateway_tests {
             None,
         )
         .await;
-        assert_eq!(status, StatusCode::OK, "FICO other query failed: {resp}");
+        assert_eq!(status, StatusCode::OK, "Helm Score other query failed: {resp}");
         assert_eq!(resp["did"], did_b);
-        // Score and band are public
-        assert!(resp["score"].is_number());
+        // helm_score and band are public
+        assert!(resp["helm_score"].is_number());
         assert!(resp["band"].is_string());
         // Financial internals must be hidden (zeroed)
         assert_eq!(resp["total_api_calls"].as_u64().unwrap_or(99), 0, "total_api_calls must be 0 for non-self");
@@ -635,14 +635,14 @@ mod gateway_tests {
     }
 
     #[tokio::test]
-    async fn test_fico_nonexistent_agent_returns_404() {
+    async fn test_helm_score_nonexistent_agent_returns_404() {
         let state = AppState::new();
         let (caller, _) = boot(&state, None).await;
 
         let (status, resp) = req(
             state,
             Method::GET,
-            "/v1/agent/did:helm:doesnotexist/credit",
+            "/v1/agent/did:helm:doesnotexist/helm-score",
             Some(&caller),
             None,
         )
@@ -1100,10 +1100,10 @@ mod gateway_tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(resp["total"].as_u64().unwrap(), 2);
 
-        // 10. FICO self-query
-        // Top up before FICO: cortex novelty premium (up to 4V) may have consumed the 5V
+        // 10. Helm Score self-query
+        // Top up before Helm Score: cortex novelty premium (up to 4V) may have consumed the 5V
         // welcome credits. This simulates a real user who has earned or purchased more credits.
-        top_up(&state, &did, 5_000_000).await; // add 5 VIRTUAL to ensure FICO succeeds
+        top_up(&state, &did, 5_000_000).await; // add 5 VIRTUAL to ensure Helm Score succeeds
         let (s, resp) = req(
             state.clone(),
             Method::GET,
@@ -1112,8 +1112,8 @@ mod gateway_tests {
             None,
         )
         .await;
-        assert_eq!(s, StatusCode::OK, "FICO failed: {resp}");
-        assert!(resp["score"].is_number());
+        assert_eq!(s, StatusCode::OK, "Helm Score failed: {resp}");
+        assert!(resp["helm_score"].is_number());
 
         // 11. Earnings / referral graph
         let (s, _) = req(
@@ -1185,7 +1185,7 @@ mod gateway_tests {
         assert_eq!(s, StatusCode::OK, "B apply failed: {resp}");
         assert_eq!(resp["application_count"].as_u64().unwrap(), 1);
 
-        // B checks A's FICO (privacy: financial internals should be hidden)
+        // B checks A's Helm Score (privacy: financial internals should be hidden)
         let (s, resp) = req(
             state.clone(),
             Method::GET,
@@ -1657,7 +1657,7 @@ mod gateway_tests {
     }
 
     #[tokio::test]
-    async fn test_attack_c19_fico_zero_balance_rejected() {
+    async fn test_attack_c19_helm_score_zero_balance_rejected() {
         let state = AppState::new();
         let (did, _) = boot(&state, None).await;
         drain_balance(&state, &did).await;
@@ -1673,13 +1673,13 @@ mod gateway_tests {
         assert_eq!(
             status,
             StatusCode::PAYMENT_REQUIRED,
-            "FICO with 0 balance must fail: {resp}"
+            "Helm Score with 0 balance must fail: {resp}"
         );
         assert_eq!(resp["error"], "insufficient_balance");
     }
 
     #[tokio::test]
-    async fn test_attack_c19_fico_no_charge_on_404() {
+    async fn test_attack_c19_helm_score_no_charge_on_404() {
         let state = AppState::new();
         let (caller, _) = boot(&state, None).await;
 
@@ -1697,7 +1697,7 @@ mod gateway_tests {
         assert_eq!(
             status,
             StatusCode::NOT_FOUND,
-            "Nonexistent DID FICO must 404: {resp}"
+            "Nonexistent DID Helm Score must 404: {resp}"
         );
 
         // Caller must NOT be charged for a 404 (DID check happens before billing)
@@ -1705,7 +1705,7 @@ mod gateway_tests {
         assert_eq!(
             balance_before,
             balance_after,
-            "Caller balance must be unchanged on 404 FICO query (was: {balance_before}, now: {balance_after})"
+            "Caller balance must be unchanged on 404 Helm Score query (was: {balance_before}, now: {balance_after})"
         );
     }
 
@@ -1741,7 +1741,7 @@ mod gateway_tests {
     }
 
     #[tokio::test]
-    async fn test_attack_c19_balance_deducted_after_fico() {
+    async fn test_attack_c19_balance_deducted_after_helm_score() {
         use crate::gateway::pricing::VIRTUAL_UNIT;
         let state = AppState::new();
         let (did, _) = boot(&state, None).await;
@@ -1756,17 +1756,17 @@ mod gateway_tests {
             None,
         )
         .await;
-        assert_eq!(status, StatusCode::OK, "FICO must succeed");
+        assert_eq!(status, StatusCode::OK, "Helm Score must succeed");
 
         let balance_after = get_balance(&state, &did).await;
         assert!(
             balance_after < balance_before,
-            "Balance must decrease after FICO call (before: {balance_before}, after: {balance_after})"
+            "Balance must decrease after Helm Score call (before: {balance_before}, after: {balance_after})"
         );
         assert_eq!(
             balance_before - balance_after,
             2 * VIRTUAL_UNIT,
-            "Exactly 2 VIRTUAL must be deducted for FICO query"
+            "Exactly 2 VIRTUAL must be deducted for Helm Score query"
         );
     }
 
@@ -2130,11 +2130,11 @@ mod gateway_tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // C39: FICO pool_memberships uses O(1) agent.pool_ids (not O(n×m) scan)
+    // C39: Helm Score pool_memberships uses O(1) agent.pool_ids (not O(n×m) scan)
     // ─────────────────────────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn test_attack_c39_fico_pool_memberships_accurate() {
+    async fn test_attack_c39_helm_score_pool_memberships_accurate() {
         let state = AppState::new();
         let (did_a, _) = boot(&state, None).await;
         let (did_b, _) = boot(&state, None).await;
@@ -2163,7 +2163,7 @@ mod gateway_tests {
         let (s, _) = join_pool(&state, &did_b, &pool_id, 1_000_000).await;
         assert_eq!(s, StatusCode::OK);
 
-        // A's FICO should report 1 pool membership
+        // A's Helm Score should report 1 pool membership
         top_up(&state, &did_a, 5_000_000).await;
         let (s, resp) = req(
             state.clone(),
@@ -2176,7 +2176,7 @@ mod gateway_tests {
         assert_eq!(resp["pool_memberships"].as_u64().unwrap_or(99), 1,
             "A should have 1 pool membership from initial contribution");
 
-        // B's FICO should report 1 pool membership
+        // B's Helm Score should report 1 pool membership
         top_up(&state, &did_b, 5_000_000).await;
         let (s, resp) = req(
             state.clone(),
@@ -2386,5 +2386,153 @@ mod gateway_tests {
         assert_eq!(s2, StatusCode::CONFLICT, "H2 should fail with 409: {resp2}");
         assert_eq!(resp2["error"], "pool_not_awaiting_operator",
             "Pool is PendingContract after H1 claimed — correct rejection for H2");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // x402: POST /v1/payment/topup
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// POST /v1/payment/topup with no tx_hash → 402 with x402 payment instructions.
+    #[tokio::test]
+    async fn test_x402_no_tx_hash_returns_402_with_payment_info() {
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+        top_up(&state, &did, 5_000_000).await; // fund for boot fee
+
+        // POST with empty body (no tx_hash)
+        let (status, resp) = req(
+            state.clone(),
+            Method::POST,
+            "/v1/payment/topup",
+            Some(&did),
+            Some(json!({})),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::PAYMENT_REQUIRED, "Must return 402: {resp}");
+        assert_eq!(resp["x402Version"].as_u64().unwrap(), 1);
+        assert!(resp["accepts"].is_array());
+        let opt = &resp["accepts"][0];
+        assert_eq!(opt["network"], "base-mainnet");
+        assert_eq!(
+            opt["payTo"],
+            "0x7e0118A33202c03949167853b05631baC0fA9756",
+            "Treasury address must match Jay's wallet"
+        );
+        assert_eq!(opt["asset"], "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "USDC on Base mainnet");
+        assert_eq!(opt["extra"]["decimals"].as_u64().unwrap(), 6);
+    }
+
+    /// POST /v1/payment/topup with explicit null tx_hash → 402.
+    #[tokio::test]
+    async fn test_x402_null_tx_hash_returns_402() {
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+        top_up(&state, &did, 5_000_000).await;
+
+        let (status, resp) = req(
+            state.clone(),
+            Method::POST,
+            "/v1/payment/topup",
+            Some(&did),
+            Some(json!({"tx_hash": null})),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::PAYMENT_REQUIRED, "Null tx_hash must return 402: {resp}");
+        assert_eq!(resp["x402Version"].as_u64().unwrap(), 1);
+    }
+
+    /// POST /v1/payment/topup with invalid tx_hash format → 400.
+    #[tokio::test]
+    async fn test_x402_invalid_hash_format_returns_400() {
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+        top_up(&state, &did, 5_000_000).await;
+
+        let (status, resp) = req(
+            state.clone(),
+            Method::POST,
+            "/v1/payment/topup",
+            Some(&did),
+            Some(json!({"tx_hash": "not-a-valid-hash"})),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST, "Invalid hash must return 400: {resp}");
+        assert_eq!(resp["error"], "invalid_tx_hash");
+    }
+
+    /// POST /v1/payment/topup with syntactically valid but non-existent tx → fails.
+    /// (A real Base RPC would return null for pending/missing txs; here we get a network error.)
+    #[tokio::test]
+    async fn test_x402_valid_format_nonexistent_tx_fails() {
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+        top_up(&state, &did, 5_000_000).await;
+
+        // Valid 66-char hex hash that doesn't exist on any network
+        let fake_hash = "0x0000000000000000000000000000000000000000000000000000000000000001";
+        let (status, resp) = req(
+            state.clone(),
+            Method::POST,
+            "/v1/payment/topup",
+            Some(&did),
+            Some(json!({"tx_hash": fake_hash})),
+        )
+        .await;
+
+        // Either rpc_error (can't reach mainnet.base.org in test), tx_not_found, or
+        // no_usdc_transfer_to_treasury — any non-200 is correct.
+        assert_ne!(status, StatusCode::OK,
+            "Non-existent tx must not return 200: {resp}");
+        assert!(resp["error"].is_string(),
+            "Must return error field: {resp}");
+    }
+
+    /// Replay protection: same tx_hash cannot be used twice.
+    #[tokio::test]
+    async fn test_x402_replay_protection() {
+        use std::collections::HashSet;
+        let state = AppState::new();
+        let (did, _) = boot(&state, None).await;
+        top_up(&state, &did, 5_000_000).await;
+
+        // Manually insert a fake tx as "already used"
+        let fake_hash = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+        state.topup_txs.write().await.insert(fake_hash.to_string());
+
+        // Try to use the same hash
+        let (status, resp) = req(
+            state.clone(),
+            Method::POST,
+            "/v1/payment/topup",
+            Some(&did),
+            Some(json!({"tx_hash": fake_hash})),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::CONFLICT, "Replay must return 409: {resp}");
+        assert_eq!(resp["error"], "tx_already_used");
+    }
+
+    /// x402 topup requires auth — unauthenticated request must fail.
+    #[tokio::test]
+    async fn test_x402_requires_auth() {
+        let state = AppState::new();
+
+        // No DID in auth header
+        let (status, resp) = req(
+            state.clone(),
+            Method::POST,
+            "/v1/payment/topup",
+            None,
+            Some(json!({"tx_hash": null})),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::UNAUTHORIZED,
+            "Unauthenticated topup must return 401: {resp}");
     }
 }

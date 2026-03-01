@@ -22,7 +22,7 @@
 //!   │  F-Line: Sense Cortex  → helm-engine QKV-G + Socratic Claw │
 //!   │  G-Line: Sync-O        → helm-engine GRG pipeline          │
 //!   │  E-Line: Sense Memory  → helm-store TieredCache/LWW CRDT   │
-//!   │  D-Line: FICO          → helm-identity ReputationScore      │
+//!   │  D-Line: Helm Score    → helm-identity ReputationScore      │
 //!   │  Pool:   HelmPool      → helm-token X.402 + StakePool      │
 //!   │  Graph:  Earnings      → billing.rs referral tracking       │
 //!   └────────────────────────────────────────────────────────────┘
@@ -34,6 +34,7 @@ pub mod handlers;
 pub mod pricing;
 pub mod server;
 pub mod state;
+pub mod x402;
 
 #[cfg(test)]
 mod tests;
@@ -66,7 +67,7 @@ pub async fn start_gateway(port: u16, public_url: Option<String>) -> Result<()> 
     println!("║    F-Line  Sense Cortex    POST /v1/sense/cortex         ║");
     println!("║    G-Line  Sync-O (GRG)   POST /v1/synco/stream         ║");
     println!("║    E-Line  Sense Memory   GET/PUT /v1/sense/memory/:key  ║");
-    println!("║    D-Line  FICO Score     GET /v1/agent/:did/credit      ║");
+    println!("║    D-Line  Helm Score     GET /v1/agent/:did/helm-score   ║");
     println!("║    Pool    HelmPool       POST /v1/pool                  ║");
     println!("║    Market  Marketplace    POST /v1/marketplace/post      ║");
     println!("║    Graph   Earnings       GET /v1/agent/:did/earnings    ║");

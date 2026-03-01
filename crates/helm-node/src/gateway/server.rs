@@ -4,7 +4,7 @@
 //!
 //! ### Identity (DID 해자)
 //!   POST   /v1/agent/boot              → AgentBoot: create DID + init engine
-//!   GET    /v1/agent/:did/credit       → D-Line: FICO credit score
+//!   GET    /v1/agent/:did/helm-score   → D-Line: Helm Score (agent reputation)
 //!   GET    /v1/agent/:did/earnings     → Graph 해자: referral earnings
 //!
 //! ### Sense Lines
@@ -34,6 +34,11 @@
 //!   POST   /v1/package/alpha-hunt      → Package 1: DeFi signal pipeline
 //!   POST   /v1/package/protocol-shield → Package 2: B2B data hygiene
 //!
+//! ### x402 Payment (USDC → VIRTUAL topup)
+//!   POST   /v1/payment/topup           → x402: USDC on Base → VIRTUAL balance credit
+//!                                        No tx_hash → 402 with payment requirements
+//!                                        With tx_hash → verify on-chain, credit balance
+//!
 //! ### Public
 //!   GET    /v1/leaderboard             → Top 100 referrers (viral engine)
 //!   GET    /health                     → Liveness check
@@ -59,12 +64,13 @@ use crate::gateway::handlers::{
     boot::handle_boot,
     cortex::handle_cortex,
     earnings::{handle_earnings, handle_leaderboard},
-    fico::handle_fico,
+    helm_score::handle_helm_score,
     marketplace::{handle_apply, handle_create_post, handle_list_posts},
     memory::{handle_memory_del, handle_memory_get, handle_memory_list, handle_memory_put},
     packages::{handle_alpha_hunt, handle_protocol_shield},
     pool::{handle_claim_operator, handle_create_pool, handle_join_pool, handle_list_pools, handle_pool_status},
     synco::{handle_synco, handle_synco_decode},
+    topup::handle_topup,
 };
 use crate::gateway::state::AppState;
 
@@ -119,7 +125,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/synco/stream",          post(handle_synco))
         .route("/v1/synco/decode",          post(handle_synco_decode))
         // Identity
-        .route("/v1/agent/:did/credit",     get(handle_fico))
+        .route("/v1/agent/:did/helm-score", get(handle_helm_score))
+        .route("/v1/agent/:did/credit",     get(handle_helm_score))  // legacy alias
         .route("/v1/agent/:did/earnings",   get(handle_earnings))
         // Pool
         .route("/v1/pool",                  post(handle_create_pool))
@@ -134,6 +141,8 @@ pub fn build_router(state: AppState) -> Router {
         // Packages
         .route("/v1/package/alpha-hunt",    post(handle_alpha_hunt))
         .route("/v1/package/protocol-shield", post(handle_protocol_shield))
+        // x402 topup: DID auth required so we know which balance to credit
+        .route("/v1/payment/topup",         post(handle_topup))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     // Public routes (no auth required)
@@ -272,7 +281,7 @@ async fn handle_root() -> Json<serde_json::Value> {
         "description": "G-Metric 기반 자율 지능 엔진 | Autonomous Intelligence Engine",
         "lines": {
             "B": "Alpha Freshness Oracle — POST /v1/package/alpha-hunt",
-            "D": "Helm FICO Credit Bureau — GET /v1/agent/:did/credit",
+            "D": "Helm Score Bureau — GET /v1/agent/:did/helm-score",
             "E": "Sense Memory — GET/PUT/DEL /v1/sense/memory/:key",
             "F": "Sense Cortex (G-Metric) — POST /v1/sense/cortex",
             "G": "Sync-O Protocol (GRG) — POST /v1/synco/stream",
@@ -280,7 +289,7 @@ async fn handle_root() -> Json<serde_json::Value> {
         "packages": {
             "alpha_hunt": "10 VIRTUAL/call — DeFi signal pipeline",
             "protocol_shield": "B2B data hygiene for Akash/Walrus/Bittensor",
-            "trust_transaction": "2 VIRTUAL/query — FICO-gated escrow",
+            "trust_transaction": "2 VIRTUAL/query — Helm Score-gated escrow",
             "sovereign_agent": "500 VIRTUAL/month — all lines unlimited",
         },
         "moats": {

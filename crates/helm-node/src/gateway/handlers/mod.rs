@@ -1,9 +1,10 @@
 pub mod boot;
 pub mod cortex;
 pub mod earnings;
-pub mod fico;
+pub mod helm_score;
 pub mod marketplace;
 pub mod memory;
 pub mod packages;
 pub mod pool;
 pub mod synco;
+pub mod topup;
