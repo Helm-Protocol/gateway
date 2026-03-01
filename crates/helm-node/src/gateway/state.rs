@@ -150,6 +150,10 @@ pub struct FundingPool {
     pub api_key_encrypted: Option<String>,
     /// Job post ID for recruiting a human operator
     pub human_wanted_post_id: Option<String>,
+    /// Accumulated creator management reward: 20% of each member contribution.
+    /// Creator claims via POST /v1/pool/:id/claim-reward.
+    #[serde(default)]
+    pub creator_pending_reward: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

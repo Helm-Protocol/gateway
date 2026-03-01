@@ -19,22 +19,24 @@
 //!   POST   /v1/synco/stream            → G-Line: Sync-O encode (GRG codec, $1.50/GB)
 //!   POST   /v1/synco/decode            → G-Line: Sync-O decode (GRG recover, $1.00/GB)
 //!
-//! ### Pool (Pool 해자)
-//!   POST   /v1/pool                    → Create funding pool
-//!   GET    /v1/pool                    → List all pools
-//!   GET    /v1/pool/:id                → Pool status
-//!   POST   /v1/pool/:id/join           → Join pool with stake
-//!   POST   /v1/pool/:id/claim-operator → Human claims operator role (Pool moat)
+//! ### Pool (Pool 해자) — fee: 3% treasury + 20% creator cut per contribution
+//!   POST   /v1/pool                       → Create funding pool (5V fee → treasury)
+//!   GET    /v1/pool                       → List all pools
+//!   GET    /v1/pool/:id                   → Pool status
+//!   POST   /v1/pool/:id/join              → Join pool (stake + 3% Jay fee; 20% → creator)
+//!   POST   /v1/pool/:id/claim-operator    → Human claims operator role (300V/month)
+//!   POST   /v1/pool/:id/claim-reward      → Pool creator claims 20% accumulated cut
 //!
 //! ### Marketplace (agent-initiated)
-//!   POST   /v1/marketplace/post        → Create job / subcontract / HumanContractPrincipal post
+//!   POST   /v1/marketplace/post        → Create post (free tier: 3 max; subscribed: unlimited)
 //!   GET    /v1/marketplace/post        → List open posts
 //!   POST   /v1/marketplace/post/:id/apply → Apply to a post
 //!   POST   /v1/marketplace/post/:id/accept/:applicant_did → Accept + settle (5% Helm fee)
 //!
-//! ### Packages
-//!   POST   /v1/package/alpha-hunt      → Package 1: DeFi signal pipeline
-//!   POST   /v1/package/protocol-shield → Package 2: B2B data hygiene
+//! ### Packages (월정액 — unlocks unlimited marketplace + bundled access)
+//!   POST   /v1/package/subscribe       → Subscribe (AlphaHunt 50V | ProtocolShield 100V | Sovereign 200V) / month
+//!   POST   /v1/package/alpha-hunt      → Package 1: DeFi signal pipeline (10V or bundled)
+//!   POST   /v1/package/protocol-shield → Package 2: B2B data hygiene (5V/MB or bundled)
 //!
 //! ### x402 Payment (USDC → VIRTUAL topup)
 //!   POST   /v1/payment/topup           → x402: USDC on Base → VIRTUAL balance credit
@@ -71,7 +73,8 @@ use crate::gateway::handlers::{
     marketplace::{handle_accept_application, handle_apply, handle_create_post, handle_list_posts},
     memory::{handle_memory_del, handle_memory_get, handle_memory_list, handle_memory_put},
     packages::{handle_alpha_hunt, handle_protocol_shield},
-    pool::{handle_claim_operator, handle_create_pool, handle_join_pool, handle_list_pools, handle_pool_status},
+    pool::{handle_claim_creator_reward, handle_claim_operator, handle_create_pool, handle_join_pool, handle_list_pools, handle_pool_status},
+    subscriptions::handle_subscribe,
     synco::{handle_synco, handle_synco_decode},
     topup::handle_topup,
 };
@@ -137,6 +140,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/pool/:id",              get(handle_pool_status))
         .route("/v1/pool/:id/join",            post(handle_join_pool))
         .route("/v1/pool/:id/claim-operator", post(handle_claim_operator))
+        .route("/v1/pool/:id/claim-reward",   post(handle_claim_creator_reward))
         // Marketplace (manual agent-initiated posts)
         .route("/v1/marketplace/post",      post(handle_create_post))
         .route("/v1/marketplace/post",      get(handle_list_posts))
@@ -145,6 +149,7 @@ pub fn build_router(state: AppState) -> Router {
         // Packages
         .route("/v1/package/alpha-hunt",    post(handle_alpha_hunt))
         .route("/v1/package/protocol-shield", post(handle_protocol_shield))
+        .route("/v1/package/subscribe",     post(handle_subscribe))
         // x402 topup: DID auth required so we know which balance to credit
         .route("/v1/payment/topup",         post(handle_topup))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));

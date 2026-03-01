@@ -9,3 +9,4 @@ pub mod packages;
 pub mod pool;
 pub mod synco;
 pub mod topup;
+pub mod subscriptions;

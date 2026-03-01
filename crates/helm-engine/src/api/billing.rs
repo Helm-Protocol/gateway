@@ -59,6 +59,20 @@ pub const MARKETPLACE_FEE_BP: u64 = 500;
 /// Pool creation fee in VIRTUAL micro-units (5 VIRTUAL → treasury)
 pub const POOL_CREATION_FEE_VIRTUAL: u64 = 5_000_000;
 
+/// Pool contribution: 3% platform fee on every stake → 100% treasury.
+/// Industry standard for managed infra pools. Agents pay stake × 1.03 total.
+pub const POOL_CONTRIBUTION_FEE_BP: u64 = 300;
+
+/// Pool creator management cut: 20% of each contribution accumulates in
+/// FundingPool::creator_pending_reward. Creator claims via POST /v1/pool/:id/claim-reward.
+/// This is paid from the contribution (agent pays stake, 20% credited to creator, 80% to pool).
+pub const POOL_CREATOR_CUT_BP: u64 = 2_000;
+
+/// Package subscription prices (VIRTUAL micro-units per month)
+pub const PACKAGE_ALPHA_HUNT_MONTHLY: u64   =  50_000_000; // 50 VIRTUAL/month
+pub const PACKAGE_PROTOCOL_SHIELD_MONTHLY: u64 = 100_000_000; // 100 VIRTUAL/month
+pub const PACKAGE_SOVEREIGN_MONTHLY: u64    = 200_000_000; // 200 VIRTUAL/month (all-lines)
+
 /// A-Front (LLM proxy) markup over cost: 5%
 pub const LLM_MARKUP_BP: u64 = 500;
 
@@ -114,6 +128,10 @@ pub enum ProtocolFeeType {
     PoolCreation,
     /// 5% of job budget charged when creator accepts an application
     MarketplaceSettle,
+    /// 3% of stake amount on every pool contribution
+    PoolContribution,
+    /// Monthly package subscription (AlphaHunt / ProtocolShield / Sovereign)
+    PackageSubscription,
 }
 
 /// Billing ledger tracking all API usage and protocol fees.
@@ -260,6 +278,18 @@ impl BillingLedger {
             payer,
             timestamp_ms,
         )
+    }
+
+    /// Charge 3% pool contribution fee (Jay's cut on every pool stake).
+    /// Called when any agent joins a pool. Amount = stake × 3%.
+    pub fn charge_pool_contribution_fee(&mut self, payer: &str, stake: u64, timestamp_ms: u64) -> u64 {
+        let fee = stake * POOL_CONTRIBUTION_FEE_BP / 10_000;
+        self.record_protocol_fee(ProtocolFeeType::PoolContribution, fee, payer, timestamp_ms)
+    }
+
+    /// Charge package subscription fee → 100% treasury.
+    pub fn charge_package_subscription(&mut self, payer: &str, amount: u64, timestamp_ms: u64) -> u64 {
+        self.record_protocol_fee(ProtocolFeeType::PackageSubscription, amount, payer, timestamp_ms)
     }
 
     /// Charge staking yield cut (10% of epoch yield).

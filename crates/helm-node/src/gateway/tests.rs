@@ -679,7 +679,9 @@ mod gateway_tests {
         let stake = 1_000_000u64; // 1 VIRTUAL
         let (status, resp) = join_pool(&state, &joiner, &pool_id, stake).await;
         assert_eq!(status, StatusCode::OK, "Join pool failed: {resp}");
-        assert!(resp["total_collected"].as_u64().unwrap() >= stake);
+        // 80% of stake goes to pool (20% → creator_pending_reward)
+        let net_to_pool = stake * 80 / 100;
+        assert!(resp["total_collected"].as_u64().unwrap() >= net_to_pool);
     }
 
     #[tokio::test]
@@ -1207,7 +1209,8 @@ mod gateway_tests {
 
         let (s, resp) = join_pool(&state, &did_b, &pool_id, 500_000).await;
         assert_eq!(s, StatusCode::OK, "B join pool failed: {resp}");
-        assert!(resp["total_collected"].as_u64().unwrap() >= 500_000);
+        // 80% of stake goes to pool (20% → creator_pending_reward)
+        assert!(resp["total_collected"].as_u64().unwrap() >= 400_000);
 
         // Verify pool has B as member
         let (s, pool_status) = req(
@@ -1776,12 +1779,12 @@ mod gateway_tests {
 
     #[tokio::test]
     async fn test_attack_c25_marketplace_post_limit() {
-        use crate::gateway::state::MAX_POSTS_PER_DID;
+        use crate::gateway::handlers::marketplace::FREE_TIER_POST_LIMIT;
         let state = AppState::new();
         let (did, _) = boot(&state, None).await;
 
-        // Create exactly MAX_POSTS_PER_DID posts — all must succeed
-        for i in 0..MAX_POSTS_PER_DID {
+        // Free-tier agents can create exactly FREE_TIER_POST_LIMIT posts
+        for i in 0..FREE_TIER_POST_LIMIT {
             let (status, resp) = create_post(
                 &state,
                 &did,
@@ -1792,22 +1795,22 @@ mod gateway_tests {
             assert_eq!(
                 status,
                 StatusCode::CREATED,
-                "Post {i}/{MAX_POSTS_PER_DID} must succeed: {resp}"
+                "Post {i}/{FREE_TIER_POST_LIMIT} must succeed: {resp}"
             );
         }
 
-        // One more post must be rejected
+        // One more post must be rejected (free tier exhausted)
         let (status, resp) = create_post(&state, &did, "Over The Limit", "Too many posts.").await;
         assert_eq!(
             status,
             StatusCode::TOO_MANY_REQUESTS,
-            "Post #{MAX_POSTS_PER_DID} + 1 must be rejected: {resp}"
+            "Post #{FREE_TIER_POST_LIMIT} + 1 must be rejected: {resp}"
         );
         assert_eq!(resp["error"], "post_limit_reached");
         assert_eq!(
             resp["max"].as_u64().unwrap_or(0),
-            MAX_POSTS_PER_DID as u64,
-            "Error response must include the correct limit"
+            FREE_TIER_POST_LIMIT as u64,
+            "Error response must include the correct free-tier limit"
         );
     }
 

@@ -16,9 +16,13 @@ use uuid::Uuid;
 
 use crate::gateway::auth::CallerDid;
 use crate::gateway::state::{
-    AppState, Application, MarketplacePost, PostStatus, PostType, now_ms, MAX_POSTS_PER_DID,
+    AppState, Application, MarketplacePost, PackageTier, PostStatus, PostType, now_ms, MAX_POSTS_PER_DID,
 };
 use crate::gateway::pricing::VIRTUAL_UNIT;
+
+/// Free-tier (PackageTier::None) post limit: enough to participate, not enough to spam.
+/// Buy any monthly subscription → unlimited posts.
+pub const FREE_TIER_POST_LIMIT: usize = 3;
 
 // ── Create Post ─────────────────────────────────────────────────────────────
 
@@ -65,16 +69,36 @@ pub async fn handle_create_post(
     Extension(CallerDid(did)): Extension<CallerDid>,
     Json(req): Json<CreatePostRequest>,
 ) -> Result<(StatusCode, Json<CreatePostResponse>), (StatusCode, Json<serde_json::Value>)> {
-    // Enforce per-DID post limit (spam/flooding protection: C25)
+    // Enforce per-DID post limit — gated by PackageTier.
+    // Free tier: 3 posts max. Any paid subscription: unlimited (MAX_POSTS_PER_DID).
     {
+        let tier = {
+            let agents = state.agents.read().await;
+            agents.get(&did).map(|a| a.package_tier.clone()).unwrap_or(PackageTier::None)
+        };
+        let post_limit = match tier {
+            PackageTier::None => FREE_TIER_POST_LIMIT,
+            _ => MAX_POSTS_PER_DID,
+        };
         let posts = state.posts.read().await;
         let did_post_count = posts.values().filter(|p| p.creator_did == did).count();
-        if did_post_count >= MAX_POSTS_PER_DID {
+        if did_post_count >= post_limit {
+            let is_free = matches!(
+                {
+                    let agents = state.agents.read().await;
+                    agents.get(&did).map(|a| a.package_tier.clone()).unwrap_or(PackageTier::None)
+                },
+                PackageTier::None
+            );
             return Err((StatusCode::TOO_MANY_REQUESTS, Json(json!({
                 "error": "post_limit_reached",
                 "current": did_post_count,
-                "max": MAX_POSTS_PER_DID,
-                "hint": "Delete closed posts to make room."
+                "max": post_limit,
+                "hint": if is_free {
+                    "Free tier limited to 3 posts. Subscribe via POST /v1/package/subscribe for unlimited posting."
+                } else {
+                    "Delete closed posts to make room."
+                }
             }))));
         }
     }

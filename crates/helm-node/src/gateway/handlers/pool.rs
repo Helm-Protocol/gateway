@@ -30,6 +30,8 @@ use uuid::Uuid; // used for pool_id generation
 
 use crate::gateway::auth::CallerDid;
 use crate::gateway::pricing::VIRTUAL_UNIT;
+use helm_engine::api::billing::{POOL_CONTRIBUTION_FEE_BP, POOL_CREATOR_CUT_BP};
+
 use crate::gateway::state::{
     AppState, BondType, FundingPool, IdentityBondRecord,
     PackageTier, PoolMember, PoolStatus, now_ms,
@@ -153,6 +155,7 @@ pub async fn handle_create_pool(
         created_at_ms: now,
         api_key_encrypted: None,
         human_wanted_post_id: None,
+        creator_pending_reward: 0,
     };
 
     state.pools.write().await.insert(pool_id.clone(), pool);
@@ -242,15 +245,25 @@ pub async fn handle_join_pool(
     }
 
     // TOCTOU fix: deduct balance ATOMICALLY first, restore on any pool error.
-    // Old pattern (check → pool → deduct) had a race window where two concurrent
-    // requests both passed the check then both deducted from the same balance.
+    // Fee structure on each stake:
+    //   3%  → Jay treasury (POOL_CONTRIBUTION_FEE_BP)
+    //   20% → pool creator pending reward (POOL_CREATOR_CUT_BP)
+    //   77% → pool.bnkr_collected
+    // Agent pays stake × 1.03 total (platform fee is additive, not deducted from pool share).
     let stake = req.stake_virtual;
-    state.deduct_balance(&did, stake).await
+    let platform_fee = stake.saturating_mul(POOL_CONTRIBUTION_FEE_BP) / 10_000;   // 3% surcharge
+    let creator_cut  = stake.saturating_mul(POOL_CREATOR_CUT_BP) / 10_000;         // 20% of stake
+    let net_to_pool  = stake.saturating_sub(creator_cut);            // 80% to pool
+    let total_due    = stake.saturating_add(platform_fee);           // agent pays stake + 3%
+
+    state.deduct_balance(&did, total_due).await
         .map_err(|avail| (StatusCode::PAYMENT_REQUIRED, Json(json!({
             "error": "insufficient_balance",
-            "required": stake,
+            "required": total_due,
+            "stake": stake,
+            "platform_fee_3pct": platform_fee,
             "available": avail,
-            "message": "Insufficient VIRTUAL balance to join pool with this stake"
+            "message": "Insufficient VIRTUAL balance. Need stake + 3% Helm pool fee."
         }))))?;
 
     // Pool update — restore balance on failure
@@ -275,27 +288,29 @@ pub async fn handle_join_pool(
                     }))))
                 } else {
                     if let Some(m) = pool.members.iter_mut().find(|m| m.did == did) {
-                        m.stake_bnkr = m.stake_bnkr.saturating_add(stake);
+                        m.stake_bnkr = m.stake_bnkr.saturating_add(net_to_pool);
                     } else {
                         pool.members.push(PoolMember {
                             did: did.clone(),
-                            stake_bnkr: stake,
+                            stake_bnkr: net_to_pool,
                             credits_this_cycle: 0,
                             joined_at_ms: now_ms(),
                         });
                     }
-                    pool.bnkr_collected = pool.bnkr_collected.saturating_add(stake);
+                    // 80% to pool, 20% to creator pending reward
+                    pool.bnkr_collected = pool.bnkr_collected.saturating_add(net_to_pool);
+                    pool.creator_pending_reward = pool.creator_pending_reward.saturating_add(creator_cut);
                     None
                 }
             }
         }
     };
 
-    // Rollback on pool error
+    // Rollback on pool error — restore full amount paid (stake + platform_fee)
     if let Some(e) = pool_err {
         let mut agents = state.agents.write().await;
         if let Some(agent) = agents.get_mut(&did) {
-            agent.virtual_balance = agent.virtual_balance.saturating_add(stake);
+            agent.virtual_balance = agent.virtual_balance.saturating_add(total_due);
         }
         return Err(e);
     }
@@ -328,11 +343,17 @@ pub async fn handle_join_pool(
         }
     }
 
+    // Record 3% platform fee → treasury (after success, before response)
+    {
+        let ts = now_ms();
+        state.billing.write().await.charge_pool_contribution_fee(&did, stake, ts);
+    }
+
     state.record_api_call(&did, "pool/join", 0).await; // joining is free
 
     Ok(Json(JoinPoolResponse {
         pool_id,
-        your_stake: req.stake_virtual,
+        your_stake: net_to_pool, // net stake credited to pool
         total_collected,
         progress_pct,
         status: if progress_pct >= 100.0 { "AwaitingOperator".to_string() } else { "Fundraising".to_string() },
@@ -583,4 +604,64 @@ pub async fn handle_claim_operator(
             OPERATOR_MONTHLY_REWARD,
         ),
     }))
+}
+
+// ── Claim Creator Reward ────────────────────────────────────────────────────
+
+/// POST /v1/pool/:id/claim-reward
+///
+/// Pool creator claims their accumulated 20% management reward.
+/// 20% of every member contribution is held in pool.creator_pending_reward.
+/// Only the pool creator can call this. Transfers accumulated VIRTUAL to their balance.
+pub async fn handle_claim_creator_reward(
+    State(state): State<AppState>,
+    Extension(CallerDid(did)): Extension<CallerDid>,
+    Path(pool_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let (reward, creator_did) = {
+        let pools = state.pools.read().await;
+        let pool = pools.get(&pool_id).ok_or_else(|| (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "pool_not_found"})),
+        ))?;
+        (pool.creator_pending_reward, pool.creator_did.clone())
+    };
+
+    if creator_did != did {
+        return Err((StatusCode::FORBIDDEN, Json(json!({
+            "error": "not_pool_creator",
+            "message": "Only the pool creator can claim creator rewards"
+        }))));
+    }
+
+    if reward == 0 {
+        return Err((StatusCode::CONFLICT, Json(json!({
+            "error": "no_reward_available",
+            "message": "No accumulated creator reward yet. Reward builds as members join."
+        }))));
+    }
+
+    // Atomically zero out pending reward and credit to creator
+    {
+        let mut pools = state.pools.write().await;
+        if let Some(pool) = pools.get_mut(&pool_id) {
+            pool.creator_pending_reward = 0;
+        }
+    }
+    {
+        let mut agents = state.agents.write().await;
+        if let Some(agent) = agents.get_mut(&did) {
+            agent.virtual_balance = agent.virtual_balance.saturating_add(reward);
+        }
+    }
+
+    tracing::info!("Pool creator reward claimed: pool={} creator={} reward={}", pool_id, did, reward);
+
+    Ok(Json(json!({
+        "ok": true,
+        "pool_id": pool_id,
+        "claimed_virtual": reward,
+        "creator_cut_pct": "20%",
+        "message": "Creator reward claimed and credited to your VIRTUAL balance."
+    })))
 }
