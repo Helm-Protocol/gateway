@@ -14,4 +14,4 @@ pub use qkvg::{
 pub mod socratic_mla;
 pub use socratic_mla::{CacheStats, GapAssessment, SocraticMlaEngine};
 pub mod proof_of_novelty;
-pub use proof_of_novelty::{build_proof_response, NoveltyProof};
+pub use proof_of_novelty::{NoveltyProof};

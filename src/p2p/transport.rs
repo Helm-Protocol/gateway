@@ -56,7 +56,6 @@ pub fn build_secure_transport(
     let sec = YamuxSecurity::default();
 
     // [보안 1] Noise 인증 설정
-    // 내 Private Key로 서명 → "내가 나임" 암호학적 증명
     let noise_config = noise::Config::new(keypair)
         .expect("[C-4] Noise keypair 설정 실패 — 키 형식 확인 필요");
 
@@ -68,12 +67,22 @@ pub fn build_secure_transport(
 
     // [보안 3] TCP + Nodelay (레이턴시 최소화)
     let tcp_cfg = tcp::Config::default().nodelay(true);
-
-    tcp::tokio::Transport::new(tcp_cfg)
+    let tcp_transport = tcp::tokio::Transport::new(tcp_cfg)
         .upgrade(upgrade::Version::V1Lazy)
-        .authenticate(noise_config)    // ← Noise 핸드셰이크
-        .multiplex(yamux_cfg)          // ← 보안 yamux
-        .timeout(Duration::from_secs(30))  // ← 행잉 연결 방어
+        .authenticate(noise_config)
+        .multiplex(yamux_cfg)
+        .timeout(Duration::from_secs(30))
+        .boxed();
+
+    // [보안 4] QUIC (UDP) 도입 - Connection Migration 및 0-RTT 지원
+    let quic_transport = libp2p::quic::tokio::Transport::new(libp2p::quic::Config::new(keypair));
+
+    // TCP와 QUIC을 동시에 지원하도록 묶음 (OrTransport)
+    libp2p::core::transport::OrTransport::new(quic_transport, tcp_transport)
+        .map(|either_output, _| match either_output {
+            libp2p::core::either::Either::Left((peer_id, muxer)) => (peer_id, StreamMuxerBox::new(muxer)),
+            libp2p::core::either::Either::Right((peer_id, muxer)) => (peer_id, StreamMuxerBox::new(muxer)),
+        })
         .boxed()
 }
 

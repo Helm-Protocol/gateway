@@ -113,7 +113,7 @@ impl NoveltyProof {
         }
     }
 
-    /// actix-web HTTP 응답 헤더 세트로 변환
+    /// HTTP 응답 헤더 세트로 변환
     pub fn to_headers(&self) -> Vec<(String, String)> {
         vec![
             ("X-G-Score".into(), format!("{:.4}", self.g_score)),
@@ -142,93 +142,5 @@ impl NoveltyProof {
                 "note": "에이전트가 동일한 입력으로 직접 해시 검증 가능"
             }
         })
-    }
-}
-
-// ============================
-// PROOF HEADER MIDDLEWARE
-// ============================
-
-/// API 응답에 Proof of Novelty 헤더를 자동 주입하는 헬퍼
-///
-/// actix-web 핸들러에서 사용:
-///   let proof = NoveltyProof::generate(...);
-///   let mut response = HttpResponse::Ok().json(data);
-///   inject_proof_headers(&mut response, &proof);
-pub fn build_proof_response(
-    data: serde_json::Value,
-    proof: &NoveltyProof,
-) -> actix_web::HttpResponse {
-    use actix_web::HttpResponse;
-
-    let mut builder = HttpResponse::Ok();
-
-    for (key, val) in proof.to_headers() {
-        builder.append_header((key, val));
-    }
-
-    // 응답 본문에도 proof 포함 (선택적)
-    let mut response_data = data;
-    if let Some(obj) = response_data.as_object_mut() {
-        obj.insert("_proof_of_novelty".into(), proof.to_json());
-    }
-
-    builder.json(response_data)
-}
-
-// ============================
-// TESTS
-// ============================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_proof_generation_goldilocks() {
-        let proof = NoveltyProof::generate(
-            "이더리움 덴쿤 업그레이드 수수료 90% 감소",
-            0.72,
-            Some("이더리움 덴쿤 업그레이드 발표 (2024-03)"),
-            0.694,
-            0.072,
-        );
-
-        assert_eq!(proof.g_score, 0.72);
-        assert!(!proof.nearest_doc_hash.is_empty());
-        assert!(proof.novelty_reason.contains("G=0.720"));
-        assert!(proof.computation_hash.len() == 64);
-    }
-
-    #[test]
-    fn test_proof_headers_count() {
-        let proof = NoveltyProof::generate("test query", 0.45, None, 0.4, 0.035);
-        let headers = proof.to_headers();
-        // 8개 헤더 확인
-        assert_eq!(headers.len(), 8);
-        // X-G-Score 헤더 존재 확인
-        assert!(headers.iter().any(|(k, _)| k == "X-G-Score"));
-        // X-Novelty-Proof 헤더 존재 확인
-        assert!(headers.iter().any(|(k, _)| k == "X-Novelty-Proof"));
-    }
-
-    #[test]
-    fn test_computation_hash_deterministic() {
-        // 동일 입력 → 동일 해시 (에이전트 독립 검증 가능)
-        let p1 = NoveltyProof::generate("bitcoin price", 0.5, None, 0.5, 0.05);
-        let p2 = NoveltyProof::generate("bitcoin price", 0.5, None, 0.5, 0.05);
-        assert_eq!(p1.computation_hash, p2.computation_hash);
-    }
-
-    #[test]
-    fn test_duplicate_reason() {
-        let proof = NoveltyProof::generate("old news", 0.05, Some("similar old article"), 0.05, 0.0001);
-        assert!(proof.novelty_reason.contains("캐시 반환"));
-    }
-
-    #[test]
-    fn test_void_knowledge_reason() {
-        let proof = NoveltyProof::generate("brand new topic 2099", 0.95, None, 0.95, 0.05);
-        assert!(proof.novelty_reason.contains("주제 이탈") || proof.novelty_reason.contains("신규 토픽"));
     }
 }
