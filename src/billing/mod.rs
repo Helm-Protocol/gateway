@@ -173,9 +173,10 @@ impl BillingLedger {
         let base_fee = self.pricing.get(endpoint).copied().unwrap_or(100);
         let fee = base_fee.saturating_mul(units);
 
-        // 85% treasury, 15% referrer
-        let referrer_share = (fee as f64 * REFERRER_SHARE).floor() as u64;
-        let treasury_share = fee - referrer_share;
+        // [Surgery] C3: Prevent Floating Point Errors
+        // Use Basis Points (BP) for precise integer math. 1500 BP = 15%.
+        let referrer_share = fee.saturating_mul(1500) / 10_000;
+        let treasury_share = fee.saturating_sub(referrer_share);
 
         let record = UsageRecord {
             caller: caller.to_string(),

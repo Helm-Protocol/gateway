@@ -181,16 +181,17 @@ impl GrandCrossApiBroker {
             GapAssessment {
                 is_gap: true,
                 g_score: 1.0,
-                novelty_proof: "no-cache-category".into(),
-                reason: format!("{} is never cached", req.category.endpoint_name()),
+                cached_response: None,
+                classification: "NoCache".into(),
+                cost_saved_bnkr: 0.0,
             }
         } else {
-            self.semantic_cache.assess_gap(&q_embedding, &query_str)
+            self.semantic_cache.assess_gap(&query_str, &q_embedding, 0.05)
         };
 
         // Cache hit path
         if !gap.is_gap {
-            if let Some(cached) = self.semantic_cache.retrieve(&q_embedding) {
+            if let Some(cached) = gap.cached_response {
                 info!("[broker] cache hit g={:.3} endpoint={}", gap.g_score, req.category.endpoint_name());
 
                 // [v2] Billing: charge base toll on cache hit
@@ -226,7 +227,7 @@ impl GrandCrossApiBroker {
         };
 
         // Store in semantic cache (DeFi/Encode/Recover excluded above)
-        self.semantic_cache.store(q_embedding, data.to_string());
+        self.semantic_cache.store_latent(&query_str, &data.to_string(), q_embedding);
 
         // [v2] Billing: charge full fee with novelty premium
         let units = if gap.g_score > 0.5 { 2 } else { 1 }; // premium units for high novelty
@@ -277,7 +278,7 @@ impl GrandCrossApiBroker {
     // [v2] EMBEDDING: fastembed ONNX or xxh3 fallback
     // ============================
 
-    fn embed(&self, text: &str) -> Vec<f32> {
+    pub fn embed(&self, text: &str) -> Vec<f32> {
         #[cfg(feature = "fastembed")]
         if self.config.use_semantic_embed {
             return self.embed_semantic(text);
@@ -288,7 +289,7 @@ impl GrandCrossApiBroker {
     /// fastembed BGE-small-en-v1.5 (384-dim, ONNX)
     /// Activated when USE_SEMANTIC_EMBED=true and fastembed feature enabled
     #[cfg(feature = "fastembed")]
-    fn embed_semantic(&self, text: &str) -> Vec<f32> {
+    pub fn embed_semantic(&self, text: &str) -> Vec<f32> {
         use fastembed::{EmbeddingBase, FlagEmbedding, InitOptions, EmbeddingModel};
         let model = FlagEmbedding::try_new(InitOptions {
             model_name: EmbeddingModel::BGESmallENV15,
@@ -319,7 +320,7 @@ impl GrandCrossApiBroker {
     /// XXH3 deterministic fallback (dev mode — NOT semantic)
     /// "bitcoin price" and "BTC how much" produce different vectors
     /// TODO: replace with fastembed in production
-    fn embed_xxh3(&self, text: &str) -> Vec<f32> {
+    pub fn embed_xxh3(&self, text: &str) -> Vec<f32> {
         use crate::filter::g_metric::normalize;
         let dim = 384usize;
         let hash = xxhash_rust::xxh3::xxh3_64(text.as_bytes());

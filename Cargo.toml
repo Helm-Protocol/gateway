@@ -6,25 +6,47 @@ description = "Helm-sense API Gateway — AI Agent API Brokerage with G-Metric F
 
 [workspace]
 
+# 1. HOST (A+B): 서버 + 관리자 TUI 대시보드
 [[bin]]
 name = "qkvg-gateway"
 path = "src/main.rs"
 
-[dependencies]
-# === ASYNC RUNTIME ===
-tokio = { version = "1", features = ["full"] }
+# 2. AGENT (B): 에이전트/일반 사용자용 TUI CLI 클라이언트
+[[bin]]
+name = "helm-cli"
+path = "src/bin/helm-cli/main.rs"
 
-# === WEB FRAMEWORK ===
-actix-web = { version = "4", features = ["rustls"] }
-actix-rt = "2"
+[dependencies]
+# === RUNTIME & WEB FRAMEWORK (Meta Standard) ===
+tokio = { version = "1.0", features = ["full"] }
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace", "limit", "timeout"] }
+actix-web = "4"
+
+# === TUI & CLI (Gemini CLI Standard) ===
+ratatui = "0.26"
+crossterm = { version = "0.27", features = ["event-stream"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+tui-input = "0.8"
+
+# === NETWORK & SECURITY ===
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+secrecy = { version = "0.8", features = ["serde"] }
+rustls = "0.23"
+
+# === gRPC & PROTOBUF (Internal Core Comm) ===
+tonic = "0.11"
+prost = "0.12"
 
 # === SERIALIZATION ===
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# === P2P NETWORKING (Day 0 - C-4) ===
+# === P2P NETWORKING ===
 libp2p = { version = "0.53", features = [
     "tcp",
+    "quic",
     "noise",
     "yamux",
     "gossipsub",
@@ -35,7 +57,10 @@ libp2p = { version = "0.53", features = [
     "macros",
 ]}
 
-# === CRYPTO (Day 0 - H-6/H-7) ===
+# === QUIC & HTTP/3 ===
+quinn = "0.11"
+
+# === CRYPTO ===
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"
 sha3 = "0.10"
@@ -46,10 +71,10 @@ base64 = "0.21"
 # === JWT (DID Session Tokens) ===
 jsonwebtoken = "9"
 
-# === HASHING (SyncO XXHash3 재활용) ===
+# === HASHING ===
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
-# === REGEX (Layer 1 Heuristics) ===
+# === REGEX ===
 regex = "1"
 lazy_static = "1.4"
 
@@ -59,13 +84,6 @@ redis = { version = "0.23", features = ["tokio-comp"] }
 # === DATABASE ===
 sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-rustls", "uuid", "chrono"] }
 
-# === PAYMENTS (Day 1 - H-8) ===
-# Base chain 연동 (ethers 대신 경량 alloy 사용)
-# ethers = { version = "2" }  # TODO: 배포 시 활성화
-
-# === EMBEDDING (Day 2 - Layer 2/3) ===
-fastembed = { version = "3", optional = true }  # BGE-small-en-v1.5 ONNX semantic embedding
-
 # === UTILITIES ===
 uuid = { version = "1", features = ["v4", "serde"] }
 async-trait = "0.1"
@@ -73,24 +91,18 @@ chrono = { version = "0.4", features = ["serde"] }
 ulid = "1"
 parking_lot = "0.12"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-anyhow = "1"
-thiserror = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+thiserror = "1.0"
 dotenvy = "0.15"
 
-# === HTTP CLIENT (외부 API 호출) ===
-reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
-
-[dev-dependencies]
+[build-dependencies]
+tonic-build = "0.11"
 tokio-test = "0.4"
 mockito = "1"
 
 [profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-
-
-[features]
-default = []
-fastembed = ["dep:fastembed"]  # enable semantic embedding
+opt-level = "z"     # Optimize for size (Meta Standard)
+lto = true          # Link Time Optimization
+codegen-units = 1   # Maximize optimization quality
+panic = "abort"     # Immediate termination on panic
+strip = true        # Remove debug symbols

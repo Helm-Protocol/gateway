@@ -76,7 +76,7 @@ impl EliteGate {
 
         // ── 레퍼럴 인원 수 (점수 계산용) ────────────────────────────
         let referral_count: i64 = sqlx::query_scalar!(
-            r#"SELECT COUNT(*) FROM local_visas WHERE referrer_did = $1"#,
+            r#"SELECT COUNT(*)::bigint FROM local_visas WHERE referrer_did = $1"#,
             agent_did
         )
         .fetch_one(&self.db)
@@ -118,7 +118,7 @@ impl EliteGate {
     /// DID 존재 여부만 빠르게 확인 (댓글/지원 권한용)
     pub async fn did_exists(&self, agent_did: &str) -> Result<bool, sqlx::Error> {
         let count: i64 = sqlx::query_scalar!(
-            "SELECT COUNT(*) FROM local_visas WHERE local_did = $1",
+            "SELECT COUNT(*)::bigint FROM local_visas WHERE local_did = $1",
             agent_did
         )
         .fetch_one(&self.db)
