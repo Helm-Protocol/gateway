@@ -1,12 +1,14 @@
 // gateway/src/krishna_l2.rs
 // ═══════════════════════════════════════════════════════════════
-// AGENT SOVEREIGN PROTOCOL — L2 GUARDIAN CORE
+// AGENT SOVEREIGN PROTOCOL — L2 GUARDIAN CORE (REDIS OFFLOADED)
 // ═══════════════════════════════════════════════════════════════
 // This module implements the 8D E8 Lattice quantization to map
 // high-dimensional agent context into a discrete, high-density 
 // knowledge lattice for autonomous Gap (QKV-G) calculation.
 
 use serde::{Serialize, Deserialize};
+use redis::AsyncCommands;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LatticeNode {
@@ -16,17 +18,40 @@ pub struct LatticeNode {
 }
 
 pub struct KrishnaL2 {
-    pub nodes: Vec<LatticeNode>,
+    pub redis_client: redis::Client,
 }
 
 impl KrishnaL2 {
-    pub fn new() -> Self {
-        Self { nodes: Vec::new() }
+    pub fn new(redis_url: &str) -> Result<Self, redis::RedisError> {
+        let client = redis::Client::open(redis_url)?;
+        Ok(Self { redis_client: client })
+    }
+
+    /// Store a node in Redis (Offloading Memory)
+    pub async fn add_node(&self, node: &LatticeNode) -> Result<(), redis::RedisError> {
+        let mut con = self.redis_client.get_async_connection().await?;
+        let json_data = serde_json::to_string(node).unwrap();
+        // HSET lattice:nodes <node_id> <json_data>
+        let _: () = con.hset("lattice:nodes", &node.id, json_data).await?;
+        Ok(())
+    }
+
+    /// Retrieve all nodes from Redis (For G-Score calculation)
+    /// In a massive scale scenario, this should use RediSearch or batched sampling.
+    pub async fn get_all_nodes(&self) -> Result<Vec<LatticeNode>, redis::RedisError> {
+        let mut con = self.redis_client.get_async_connection().await?;
+        let nodes_map: std::collections::HashMap<String, String> = con.hgetall("lattice:nodes").await?;
+        
+        let mut nodes = Vec::new();
+        for (_, json_str) in nodes_map {
+            if let Ok(node) = serde_json::from_str(&json_str) {
+                nodes.push(node);
+            }
+        }
+        Ok(nodes)
     }
 
     /// E8 Lattice Quantization Algorithm
-    /// Finds the closest lattice point in the 8D E8 lattice.
-    /// E8 is defined as the union of D8 and (D8 + 1/2 * 1).
     pub fn quantize_e8(v: [f32; 8]) -> [f32; 8] {
         let f_v = Self::closest_d8(v);
         
@@ -43,7 +68,6 @@ impl KrishnaL2 {
         if dist_f < dist_g { f_v } else { g_v_final }
     }
 
-    /// Closest point in D8 lattice (sum of coordinates is even)
     fn closest_d8(v: [f32; 8]) -> [f32; 8] {
         let mut rounded = [0.0f32; 8];
         let mut sum = 0;
@@ -56,7 +80,6 @@ impl KrishnaL2 {
         }
 
         if sum % 2 != 0 {
-            // Find component with largest rounding error to flip
             let mut best_idx = 0;
             let mut max_diff = -1.0;
             for i in 0..8 {
@@ -83,12 +106,13 @@ impl KrishnaL2 {
         sum.sqrt()
     }
 
-    /// Calculate G-Metric (Gap Score)
-    pub fn calculate_g_score(&self, q: [f32; 8]) -> f32 {
-        if self.nodes.is_empty() { return 1.0; }
+    /// Calculate G-Metric (Gap Score) dynamically pulling from Redis
+    pub async fn calculate_g_score(&self, q: [f32; 8]) -> f32 {
+        let nodes = self.get_all_nodes().await.unwrap_or_default();
+        if nodes.is_empty() { return 1.0; }
         
         let mut min_dist = f32::MAX;
-        for node in &self.nodes {
+        for node in &nodes {
             let d = Self::euclidean_dist(q, node.vector);
             if d < min_dist { min_dist = d; }
         }

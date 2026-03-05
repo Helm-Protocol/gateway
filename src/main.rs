@@ -465,12 +465,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect(&database_url)
         .await?;
 
-    // [Audit Compliance] 3. gRPC Client for Helm Private Core (Ultra-fast)
-    let core_addr = std::env::var("HELM_CORE_URL").unwrap_or_else(|_| "http://127.0.0.1:50051".into());
-    let core_channel = tonic::transport::Endpoint::from_shared(core_addr)?
-        .connect()
-        .await
-        .map_err(|e| format!("Failed to connect to Helm Private Core (gRPC): {}", e))?;
+    // [Audit Compliance] 3. gRPC Client for Helm Private Core (Ultra-fast Load Balanced)
+    let worker_nodes = std::env::var("WORKER_NODES")
+        .unwrap_or_else(|_| std::env::var("HELM_CORE_URL").unwrap_or_else(|_| "http://127.0.0.1:50051".into()));
+    
+    let endpoints = worker_nodes
+        .split(',')
+        .map(|addr| {
+            tonic::transport::Endpoint::from_shared(addr.to_string())
+                .unwrap_or_else(|e| panic!("Invalid gRPC endpoint '{}': {}", addr, e))
+        });
+    
+    let core_channel = tonic::transport::Channel::balance_list(endpoints);
     let core_client = HelmCoreServiceClient::new(core_channel);
 
     let http_client = reqwest::Client::builder()
@@ -481,7 +487,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let g_engine = Arc::new(filter::GMetricEngine::default());
     let tariff = Arc::new(pricing::TariffEngine::default());
     let billing = Arc::new(parking_lot::Mutex::new(BillingLedger::new()));
-    let krishna = Arc::new(krishna_l2::KrishnaL2::new());
+    
+    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
+    let krishna = Arc::new(krishna_l2::KrishnaL2::new(&redis_url).expect("Failed to connect to Redis for Lattice L2"));
 
     let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-unsafe-fallback".into());
 
