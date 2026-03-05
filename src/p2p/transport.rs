@@ -52,12 +52,12 @@ impl Default for YamuxSecurity {
 /// 올바른 Helm 핸드셰이크 없이는 연결 즉시 종료됨.
 pub fn build_secure_transport(
     keypair: &Keypair,
-) -> Boxed<(PeerId, StreamMuxerBox)> {
+) -> Result<Boxed<(PeerId, StreamMuxerBox)>, Box<dyn std::error::Error>> {
     let sec = YamuxSecurity::default();
 
-    // [보안 1] Noise 인증 설정
+    // [보안 1] Noise 인증 설정 - Zero-Panic
     let noise_config = noise::Config::new(keypair)
-        .expect("[C-4] Noise keypair 설정 실패 — 키 형식 확인 필요");
+        .map_err(|e| format!("[C-4] Noise keypair 설정 실패: {}", e))?;
 
     // [보안 2] yamux 자원 제한
     let mut yamux_cfg = yamux::Config::default();
@@ -75,15 +75,23 @@ pub fn build_secure_transport(
         .boxed();
 
     // [보안 4] QUIC (UDP) 도입 - Connection Migration 및 0-RTT 지원
-    let quic_transport = libp2p::quic::tokio::Transport::new(libp2p::quic::Config::new(keypair));
+    // India 망 최적화 (버퍼 블로트 및 DPI 저항) 반영
+    let mut quic_cfg = libp2p::quic::Config::new(keypair);
+    
+    // [Gandiva-QUIC] 0-RTT Sliver-Shot 설정
+    // 0-RTT를 통해 첫 패킷에 데이터 실어 보내기 (Phase Q-5)
+    quic_cfg.handshake_timeout = Duration::from_secs(20);
+    quic_cfg.max_idle_timeout = 30_000; // u32 in milliseconds
+
+    let quic_transport = libp2p::quic::tokio::Transport::new(quic_cfg);
 
     // TCP와 QUIC을 동시에 지원하도록 묶음 (OrTransport)
-    libp2p::core::transport::OrTransport::new(quic_transport, tcp_transport)
+    Ok(libp2p::core::transport::OrTransport::new(quic_transport, tcp_transport)
         .map(|either_output, _| match either_output {
-            libp2p::core::either::Either::Left((peer_id, muxer)) => (peer_id, StreamMuxerBox::new(muxer)),
-            libp2p::core::either::Either::Right((peer_id, muxer)) => (peer_id, StreamMuxerBox::new(muxer)),
+            futures::future::Either::Left((peer_id, muxer)) => (peer_id, StreamMuxerBox::new(muxer)),
+            futures::future::Either::Right((peer_id, muxer)) => (peer_id, StreamMuxerBox::new(muxer)),
         })
-        .boxed()
+        .boxed())
 }
 
 /// 부트스트랩 노드 목록
@@ -106,7 +114,7 @@ mod tests {
     fn test_secure_transport_builds() {
         let keypair = identity::Keypair::generate_ed25519();
         // 빌드만 성공하면 OK — 실제 연결은 통합 테스트에서
-        let _transport = build_secure_transport(&keypair);
+        let _transport = build_secure_transport(&keypair).expect("Secure transport build failed in test");
     }
 
     #[test]
