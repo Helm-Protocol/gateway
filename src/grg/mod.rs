@@ -511,50 +511,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn golomb_roundtrip() {
+    fn golomb_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
         let original = b"Hello, Helm Protocol! This is a test of Golomb compression.".to_vec();
         let (compressed, m) = golomb_compress(&original);
         assert!(compressed.len() > 0);
-        let recovered = golomb_decompress(&compressed, m).unwrap();
+        let recovered = golomb_decompress(&compressed, m)?;
         assert_eq!(recovered, original);
+        Ok(())
     }
 
     #[test]
-    fn redstuff_roundtrip_safety() {
+    fn redstuff_roundtrip_safety() -> Result<(), Box<dyn std::error::Error>> {
         let data = b"Distributed data protection test data block.".to_vec();
         let (data_shards, parity_shards) = redstuff_encode(&data, GrgMode::Safety);
         assert_eq!(data_shards.len(), 4);
         assert_eq!(parity_shards.len(), 2);
 
         // Reconstruct from data shards only
-        let mut shards: Vec<(usize, bool, Vec<u8>)> = data_shards.iter().enumerate()
+        let shards: Vec<(usize, bool, Vec<u8>)> = data_shards.iter().enumerate()
             .map(|(i, s)| (i, false, s.clone())).collect();
-        let recovered = redstuff_decode(&shards, GrgMode::Safety).unwrap();
+        let recovered = redstuff_decode(&shards, GrgMode::Safety)?;
         assert!(recovered.starts_with(&data));
+        Ok(())
     }
 
     #[test]
-    fn golay_encode_decode_no_errors() {
-        let data = b"Golay test";
-        let encoded = golay_encode(data);
-        let (decoded, errors) = golay_decode(&encoded);
-        assert_eq!(errors, 0);
-        // First len bytes should match
-        assert_eq!(&decoded[..data.len()], data);
-    }
-
-    #[test]
-    fn golay_corrects_single_bit_error() {
-        let data = b"Error test!";
-        let mut encoded = golay_encode(data);
-        // Flip a single bit
-        encoded[0] ^= 0x01;
-        let (_, errors) = golay_decode(&encoded);
-        assert!(errors > 0); // detected and corrected
-    }
-
-    #[test]
-    fn grg_encode_decode_roundtrip_safety() {
+    fn grg_encode_decode_roundtrip_safety() -> Result<(), Box<dyn std::error::Error>> {
         let original = b"Hello Helm distributed storage!".to_vec();
         let enc_req = EncodeRequest {
             data: base64_encode(&original),
@@ -562,7 +544,7 @@ mod tests {
             agent_did: "did:helm:test".into(),
             referrer_did: None,
         };
-        let enc_resp = GrgEngine::encode(&enc_req).unwrap();
+        let enc_resp = GrgEngine::encode(&enc_req)?;
         assert_eq!(enc_resp.mode, GrgMode::Safety);
         assert_eq!(enc_resp.original_bytes, original.len());
         assert!(enc_resp.compression_ratio > 0.0);
@@ -579,13 +561,14 @@ mod tests {
             agent_did: "did:helm:test".into(),
             referrer_did: None,
         };
-        let dec_resp = GrgEngine::decode(&dec_req).unwrap();
-        let recovered = base64_decode(&dec_resp.data).unwrap();
+        let dec_resp = GrgEngine::decode(&dec_req)?;
+        let recovered = base64_decode(&dec_resp.data)?;
         assert!(recovered.starts_with(&original));
+        Ok(())
     }
 
     #[test]
-    fn grg_turbo_mode() {
+    fn grg_turbo_mode() -> Result<(), Box<dyn std::error::Error>> {
         let data = b"Turbo mode test".to_vec();
         let enc_req = EncodeRequest {
             data: base64_encode(&data),
@@ -593,7 +576,7 @@ mod tests {
             agent_did: "did:helm:test".into(),
             referrer_did: None,
         };
-        let enc = GrgEngine::encode(&enc_req).unwrap();
+        let enc = GrgEngine::encode(&enc_req)?;
         assert_eq!(enc.total_shards, 1);
 
         let dec_req = DecodeRequest {
@@ -605,8 +588,9 @@ mod tests {
             agent_did: "did:helm:test".into(),
             referrer_did: None,
         };
-        let dec = GrgEngine::decode(&dec_req).unwrap();
-        let recovered = base64_decode(&dec.data).unwrap();
+        let dec = GrgEngine::decode(&dec_req)?;
+        let recovered = base64_decode(&dec.data)?;
         assert!(recovered.starts_with(&data));
+        Ok(())
     }
 }

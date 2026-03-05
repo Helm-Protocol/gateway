@@ -92,31 +92,32 @@ pub enum BrokerError {
     Serde(String),
 }
 
+use secrecy::{ExposeSecret, SecretString};
+
 // ============================
 // PROVIDER CONFIG
 // ============================
 
 #[derive(Debug, Clone)]
 pub struct ProviderConfig {
-    pub anthropic_key: String,
-    pub openai_key: String,
-    pub brave_key: String,
+    pub anthropic_key: SecretString,
+    pub openai_key: SecretString,
+    pub brave_key: SecretString,
     pub base_rpc_url: String,
-    pub coingecko_api_key: String,
+    pub coingecko_api_key: SecretString,
     /// Enable fastembed ONNX semantic embeddings
-    /// Falls back to xxh3 hash if false (dev mode)
     pub use_semantic_embed: bool,
 }
 
 impl ProviderConfig {
     pub fn from_env() -> Self {
         Self {
-            anthropic_key:      std::env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
-            openai_key:         std::env::var("OPENAI_API_KEY").unwrap_or_default(),
-            brave_key:          std::env::var("BRAVE_API_KEY").unwrap_or_default(),
+            anthropic_key:      SecretString::from(std::env::var("ANTHROPIC_API_KEY").unwrap_or_default()),
+            openai_key:         SecretString::from(std::env::var("OPENAI_API_KEY").unwrap_or_default()),
+            brave_key:          SecretString::from(std::env::var("BRAVE_API_KEY").unwrap_or_default()),
             base_rpc_url:       std::env::var("BASE_RPC_URL")
                                     .unwrap_or_else(|_| "https://mainnet.base.org".into()),
-            coingecko_api_key:  std::env::var("COINGECKO_API_KEY").unwrap_or_default(),
+            coingecko_api_key:  SecretString::from(std::env::var("COINGECKO_API_KEY").unwrap_or_default()),
             use_semantic_embed: std::env::var("USE_SEMANTIC_EMBED")
                                     .map(|v| v == "true")
                                     .unwrap_or(false),
