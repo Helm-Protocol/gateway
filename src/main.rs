@@ -491,16 +491,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
     let krishna = Arc::new(krishna_l2::KrishnaL2::new(&redis_url).expect("Failed to connect to Redis for Lattice L2"));
 
-    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-unsafe-fallback".into());
+    let jwt_secret = secrecy::SecretString::from(std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-unsafe-fallback".into()));
 
     let main_state = AppState {
         broker: Arc::new(GrandCrossApiBroker::new(
             ProviderConfig {
-                anthropic_key: std::env::var("ANTHROPIC_API_KEY").unwrap_or_default(),
-                openai_key: std::env::var("OPENAI_API_KEY").unwrap_or_default(),
-                brave_key: std::env::var("BRAVE_API_KEY").unwrap_or_default(),
+                anthropic_key: secrecy::SecretString::from(std::env::var("ANTHROPIC_API_KEY").unwrap_or_default()),
+                openai_key: secrecy::SecretString::from(std::env::var("OPENAI_API_KEY").unwrap_or_default()),
+                brave_key: secrecy::SecretString::from(std::env::var("BRAVE_API_KEY").unwrap_or_default()),
                 base_rpc_url: std::env::var("BASE_RPC_URL").unwrap_or_else(|_| "https://mainnet.base.org".into()),
-                coingecko_api_key: std::env::var("COINGECKO_API_KEY").unwrap_or_default(),
+                coingecko_api_key: secrecy::SecretString::from(std::env::var("COINGECKO_API_KEY").unwrap_or_default()),
                 use_semantic_embed: true,
             },
             Arc::new(filter::SocraticMlaEngine::new(10_000)),

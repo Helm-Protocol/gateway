@@ -132,6 +132,6 @@ mod tests {
         let k = KrishnaL2::quantize_e8(v);
         // Sum of E8 points (after *2 if shifted) must follow specific parity
         let sum: f32 = k.iter().sum();
-        println!("Quantized K: {:?}, Sum: {}", k, sum);
+        tracing::info!("Quantized K: {:?}, Sum: {}", k, sum);
     }
 }

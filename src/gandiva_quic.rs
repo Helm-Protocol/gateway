@@ -40,18 +40,34 @@ pub async fn spawn_gandiva_quic_engine(port: u16) -> Result<(), Box<dyn std::err
             tokio::spawn(async move {
                 match conn.await {
                     Ok(connection) => {
-                        // 0-RTT Connection Accepted!
                         info!("🏹 Gandiva Connection Accepted! Processing 8D Slivers...");
 
-                        // Process incoming streams in parallel (HOL-Free)
                         loop {
                             match connection.accept_uni().await {
                                 Ok(mut recv_stream) => {
                                     tokio::spawn(async move {
+                                        let mut total_read = 0;
+                                        let max_payload = 2 * 1024 * 1024; // 2MB Hard Limit
                                         let mut buf = vec![0; 4096];
-                                        if let Ok(Some(_bytes_read)) = recv_stream.read(&mut buf).await {
-                                            // Handle the 8D Sliver interpolations here
-                                            // 1번 슬라이스가 없어도 2~8번으로 즉각 복구 시작!
+                                        
+                                        // [Kaleidoscope] 5s First Byte Timeout
+                                        let read_result = tokio::time::timeout(
+                                            Duration::from_secs(5),
+                                            recv_stream.read(&mut buf)
+                                        ).await;
+
+                                        match read_result {
+                                            Ok(Ok(Some(bytes_read))) => {
+                                                total_read += bytes_read;
+                                                if total_read > max_payload {
+                                                    error!("[Kaleidoscope] QUIC Memory Bomb Blocked: {} bytes", total_read);
+                                                    return;
+                                                }
+                                                // [Logic] Handle the 8D Sliver interpolation here
+                                            }
+                                            Ok(Err(e)) => error!("QUIC stream read error: {}", e),
+                                            Err(_) => error!("QUIC stream read timeout (Slowloris blocked)"),
+                                            _ => {}
                                         }
                                     });
                                 }
