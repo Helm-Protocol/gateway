@@ -5,8 +5,9 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info};
+use crate::krishna_l2::KrishnaL2;
 
-pub async fn spawn_gandiva_quic_engine(port: u16) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn spawn_gandiva_quic_engine(port: u16, l2: Arc<KrishnaL2>) -> Result<(), Box<dyn std::error::Error>> {
     // Generate self-signed cert for Gandiva-QUIC
     let cert = rcgen::generate_simple_self_signed(vec!["gandiva.local".into()])?;
     let cert_der = cert.cert.der().to_vec();
@@ -37,6 +38,7 @@ pub async fn spawn_gandiva_quic_engine(port: u16) -> Result<(), Box<dyn std::err
 
     tokio::spawn(async move {
         while let Some(conn) = endpoint.accept().await {
+            let l2_conn = l2.clone();
             tokio::spawn(async move {
                 match conn.await {
                     Ok(connection) => {
@@ -45,9 +47,10 @@ pub async fn spawn_gandiva_quic_engine(port: u16) -> Result<(), Box<dyn std::err
                         loop {
                             match connection.accept_uni().await {
                                 Ok(mut recv_stream) => {
+                                    let l2_ref = l2_conn.clone();
                                     tokio::spawn(async move {
                                         let mut total_read = 0;
-                                        let max_payload = 2 * 1024 * 1024; // 2MB Hard Limit
+                                        let max_payload = 512 * 1024; // 512KB Strict Limit
                                         let mut buf = vec![0; 4096];
                                         
                                         // [Kaleidoscope] 5s First Byte Timeout
@@ -62,6 +65,38 @@ pub async fn spawn_gandiva_quic_engine(port: u16) -> Result<(), Box<dyn std::err
                                                 if total_read > max_payload {
                                                     error!("[Kaleidoscope] QUIC Memory Bomb Blocked: {} bytes", total_read);
                                                     return;
+                                                }
+                                                
+                                                // [Sovereign Guard] Idempotency Check (Nonce Extraction)
+                                                // Sliver format: [ID:1][Nonce:16][TS:8][Priority:1][Payload:N]
+                                                if bytes_read >= 26 {
+                                                    let nonce = &buf[1..17];
+                                                    let ts_bytes = &buf[17..25];
+                                                    let ts = u64::from_be_bytes(ts_bytes.try_into().unwrap_or([0; 8]));
+                                                    
+                                                    // Check expiration (5 mins)
+                                                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                                    if now > ts + 300 {
+                                                        error!("[Sovereign Guard] Expired 0-RTT Sliver Blocked (TS: {})", ts);
+                                                        return;
+                                                    }
+
+                                                    // Redis Bloom-like check
+                                                    let nonce_hex = hex::encode(nonce);
+                                                    if let Ok(mut conn) = l2_ref.redis_client.get_async_connection().await {
+                                                        let exists: bool = redis::cmd("SET")
+                                                            .arg(format!("nonce:{}", nonce_hex))
+                                                            .arg("1")
+                                                            .arg("NX")
+                                                            .arg("EX")
+                                                            .arg("300")
+                                                            .query_async(&mut conn).await.unwrap_or(false);
+                                                        
+                                                        if !exists {
+                                                            error!("[Sovereign Guard] Replay Attack Blocked or Duplicate: {}", nonce_hex);
+                                                            return;
+                                                        }
+                                                    }
                                                 }
                                                 // [Logic] Handle the 8D Sliver interpolation here
                                             }

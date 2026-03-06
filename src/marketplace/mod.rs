@@ -14,6 +14,7 @@ use crate::error::AppError;
 pub mod elite_gate;
 pub mod escrow_link;
 pub mod funding;
+pub mod types;
 
 use elite_gate::EliteGate;
 

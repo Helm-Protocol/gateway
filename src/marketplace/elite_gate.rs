@@ -75,13 +75,14 @@ impl EliteGate {
         let referral_ok = referral_active;
 
         // ── 레퍼럴 인원 수 (점수 계산용) ────────────────────────────
-        let referral_count: i64 = sqlx::query_scalar!(
+        let referral_count = sqlx::query_scalar!(
             r#"SELECT COUNT(*)::bigint FROM local_visas WHERE referrer_did = $1"#,
             agent_did
         )
         .fetch_one(&self.db)
-        .await?
-        .unwrap_or(0);
+        .await?;
+
+        let referral_count_val = referral_count.unwrap_or(0);
 
         // ── 최종 판정 ───────────────────────────────────────────────
         let can_post = age_ok && api_ok && referral_ok;
@@ -97,7 +98,7 @@ impl EliteGate {
         };
 
         let elite_score = if can_post {
-            EliteStatus::compute_score(age_days, api_calls, referral_count as u64)
+            EliteStatus::compute_score(age_days, api_calls, referral_count_val as u64)
         } else {
             0
         };
@@ -115,16 +116,21 @@ impl EliteGate {
         })
     }
 
+    /// Alias for check() to match Marketplace call site
+    pub async fn check_status(&self, agent_did: &str) -> Result<EliteStatus, sqlx::Error> {
+        self.check(agent_did).await
+    }
+
     /// DID 존재 여부만 빠르게 확인 (댓글/지원 권한용)
     pub async fn did_exists(&self, agent_did: &str) -> Result<bool, sqlx::Error> {
-        let count: i64 = sqlx::query_scalar!(
+        let count = sqlx::query_scalar!(
             "SELECT COUNT(*)::bigint FROM local_visas WHERE local_did = $1",
             agent_did
         )
         .fetch_one(&self.db)
-        .await?
-        .unwrap_or(0);
-        Ok(count > 0)
+        .await?;
+        
+        Ok(count.unwrap_or(0) > 0)
     }
 }
 

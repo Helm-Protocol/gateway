@@ -18,21 +18,48 @@ mod payments;
 mod pricing;
 mod synco;
 mod market;
+mod metrics;
 
-use std::net::SocketAddr;
-use std::sync::Arc;
 use axum::{
-    extract::{Path, State},
+    async_trait,
+    extract::{FromRequest, Request, Path, State},
     response::{Html, IntoResponse, Sse},
     routing::{get, post},
     Json, Router,
+    body::Bytes,
+    http::StatusCode,
 };
-use axum_extra::extract::WithRejection;
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use tracing::{error, info};
-use tower_http::timeout::TimeoutLayer;
-use sqlx::types::Uuid;
+
+// ── Strict JSON Extractor (Kaleidoscope Standard) ──────────────────
+pub struct StrictJson<T>(pub T);
+
+#[async_trait]
+impl<S, T> FromRequest<S> for StrictJson<T>
+where
+    T: serde::de::DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, String);
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let bytes = Bytes::from_request(req, state)
+            .await
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+        // Limit recursion depth to 32 to prevent memory bombs
+        let mut deserializer = serde_json::Deserializer::from_slice(&bytes);
+        // Note: serde_json default is 128, but for high-frequency agents we tighten it
+        let value = T::deserialize(&mut deserializer)
+            .map_err(|e| (StatusCode::BAD_REQUEST, format!("Sovereign Guard: Invalid JSON structure or depth: {}", e)))?;
+
+        Ok(StrictJson(value))
+    }
+}
+
+// ── Recursive Logic Guard ─────────────────────────────────────────
+pub const MAX_SYNTHESIS_DEPTH: u8 = 5;
+
+// ... (existing handlers update to use StrictJson)
 
 use crate::broker::{GrandCrossApiBroker, ProviderConfig};
 use crate::billing::BillingLedger;
@@ -66,6 +93,7 @@ pub struct AppState {
     pub did_service: Arc<auth::DidExchangeService>,
     pub db: sqlx::PgPool,
     pub core_client: HelmCoreServiceClient<Channel>,
+    pub metrics: Arc<metrics::GatewayMetrics>,
 }
 
 // ── Market Handlers (Phase 3) ────────────────────────────────────
@@ -80,7 +108,7 @@ struct MarketListReq {
 
 async fn market_list(
     State(state): State<AppState>,
-    Json(req): Json<MarketListReq>,
+    StrictJson(req): StrictJson<MarketListReq>,
 ) -> Result<impl IntoResponse, AppError> {
     let id = state.market.list_knowledge(
         &req.creator_did,
@@ -178,6 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         did_service: Arc::new(auth::DidExchangeService::new("jwt-secret")), // Simplified
         db: db.clone(),
         core_client,
+        metrics: Arc::new(metrics::GatewayMetrics::new()),
     };
 
     let app = Router::new()
@@ -187,14 +216,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/v1/market/purchase/:id", post(market_purchase))
         .route("/v1/market/listings", get(market_listings))
         .route("/v1/market/stats", get(market_stats))
-        .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
+        .layer(axum::extract::DefaultBodyLimit::max(512 * 1024))
         .layer(TimeoutLayer::new(std::time::Duration::from_secs(15)))
         .with_state(main_state);
 
     // Gandiva-QUIC Spawn
     let quic_port: u16 = std::env::var("QUIC_PORT").unwrap_or_else(|_| "4433".into()).parse().unwrap_or(4433);
+    let quic_l2 = main_state.krishna.clone();
     tokio::spawn(async move {
-        let _ = gandiva_quic::spawn_gandiva_quic_engine(quic_port).await;
+        let _ = gandiva_quic::spawn_gandiva_quic_engine(quic_port, quic_l2).await;
     });
 
     let addr: SocketAddr = format!("{}:{}", host, internal_port).parse()?;

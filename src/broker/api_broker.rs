@@ -268,7 +268,7 @@ impl GrandCrossApiBroker {
         let ts = chrono::Utc::now().timestamp_millis() as u64;
         self.billing.lock().record_call(
             agent_did,
-            referrer_did,
+            referrer_did.unwrap_or("none"),
             endpoint,
             units,
             ts,
@@ -355,7 +355,7 @@ impl GrandCrossApiBroker {
         model: &str,
         max_tokens: u64,
     ) -> Result<Value, BrokerError> {
-        if self.config.anthropic_key.is_empty() {
+        if self.config.anthropic_key.expose_secret().is_empty() {
             return Ok(json!({
                 "content": [{"type": "text", "text": format!("[DEV-Claude] {}", &prompt[..prompt.len().min(80)])}],
                 "model": model,
@@ -366,7 +366,7 @@ impl GrandCrossApiBroker {
 
         let resp = self.http
             .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.config.anthropic_key)
+            .header("x-api-key", self.config.anthropic_key.expose_secret())
             .header("anthropic-version", "2023-06-01")
             .json(&json!({
                 "model": model,
@@ -387,7 +387,7 @@ impl GrandCrossApiBroker {
         model: &str,
         max_tokens: u64,
     ) -> Result<Value, BrokerError> {
-        if self.config.openai_key.is_empty() {
+        if self.config.openai_key.expose_secret().is_empty() {
             return Ok(json!({
                 "choices": [{"message": {"content": format!("[DEV-GPT4o] {}", &prompt[..prompt.len().min(80)])}}],
                 "model": model,
@@ -398,7 +398,7 @@ impl GrandCrossApiBroker {
 
         let resp = self.http
             .post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.config.openai_key))
+            .header("Authorization", format!("Bearer {}", self.config.openai_key.expose_secret()))
             .json(&json!({
                 "model": model,
                 "max_tokens": max_tokens,
@@ -420,7 +420,7 @@ impl GrandCrossApiBroker {
         let query = payload["query"].as_str().unwrap_or("");
         let limit = payload["count"].as_u64().unwrap_or(5).min(20);
 
-        if self.config.brave_key.is_empty() {
+        if self.config.brave_key.expose_secret().is_empty() {
             return Ok(json!({
                 "results": [{"title": format!("[DEV] {}", query), "url": "https://example.com", "description": "dev mode"}],
                 "source": "brave_dev",
@@ -430,7 +430,7 @@ impl GrandCrossApiBroker {
 
         let resp = self.http
             .get("https://api.search.brave.com/res/v1/web/search")
-            .header("X-Subscription-Token", &self.config.brave_key)
+            .header("X-Subscription-Token", self.config.brave_key.expose_secret())
             .header("Accept", "application/json")
             .query(&[("q", query), ("count", &limit.to_string())])
             .send().await
@@ -521,8 +521,8 @@ impl GrandCrossApiBroker {
             .get("https://api.coingecko.com/api/v3/simple/price")
             .query(&[("ids", coin_id), ("vs_currencies", "usd")]);
 
-        if !self.config.coingecko_api_key.is_empty() {
-            req = req.header("x-cg-pro-api-key", &self.config.coingecko_api_key);
+        if !self.config.coingecko_api_key.expose_secret().is_empty() {
+            req = req.header("x-cg-pro-api-key", self.config.coingecko_api_key.expose_secret());
         }
 
         let resp = req.send().await
@@ -570,7 +570,7 @@ impl GrandCrossApiBroker {
             "total_calls": s.total_calls,
             "total_api_revenue_bnkr": s.total_api_revenue,
             "total_protocol_fees_bnkr": s.total_protocol_fees,
-            "referrer_paid_bnkr": s.referrer_paid,
+            "creator_paid_bnkr": s.creator_paid,
             "unique_callers": s.unique_callers,
         })
     }

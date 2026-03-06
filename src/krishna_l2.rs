@@ -27,12 +27,20 @@ impl KrishnaL2 {
         Ok(Self { redis_client: client })
     }
 
-    /// Store a node in Redis (Offloading Memory)
-    pub async fn add_node(&self, node: &LatticeNode) -> Result<(), redis::RedisError> {
+    /// Store a node in Redis (Offloading Memory with 24h TTL)
+    pub async fn add_node(&self, node: &LatticeNode) -> Result<(), Box<dyn std::error::Error>> {
         let mut con = self.redis_client.get_async_connection().await?;
-        let json_data = serde_json::to_string(node).unwrap();
-        // HSET lattice:nodes <node_id> <json_data>
-        let _: () = con.hset("lattice:nodes", &node.id, json_data).await?;
+        let json_data = serde_json::to_string(node)?;
+        let key = format!("lattice:node:{}", node.id);
+        
+        // Atomic SET with EXPIRE (24 Hours)
+        redis::pipe()
+            .atomic()
+            .set(&key, json_data)
+            .expire(&key, 86400)
+            .query_async(&mut con)
+            .await?;
+            
         Ok(())
     }
 

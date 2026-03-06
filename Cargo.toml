@@ -19,7 +19,9 @@ path = "src/bin/helm-cli/main.rs"
 [dependencies]
 # === RUNTIME & WEB FRAMEWORK (Meta Standard) ===
 tokio = { version = "1.0", features = ["full"] }
+tokio-stream = "0.1"
 axum = { version = "0.7", features = ["macros"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "trace", "limit", "timeout"] }
 actix-web = "4"

@@ -57,7 +57,7 @@ async fn serve_dashboard() -> Html<&'static str> {
 // SSE 텔레메트리 핸들러
 // ─────────────────────────────────
 async fn sse_telemetry(
-    State(state): State<Arc<AppState>>,
+    State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
 
     let stream = stream::unfold(state, |app| async move {
@@ -98,7 +98,7 @@ async fn sse_telemetry(
 // ─────────────────────────────────
 // 라우터 빌더
 // ─────────────────────────────────
-pub fn build_dashboard_router() -> Router<Arc<AppState>> {
+pub fn build_dashboard_router() -> Router<AppState> {
     Router::new()
         .route("/dashboard",      get(serve_dashboard))
         .route("/api/telemetry",  get(sse_telemetry))
