@@ -3,3 +3,6 @@
 .env.local
 **/*.lock~
 !.claude/
+/reports/
+*.pem
+*.key
