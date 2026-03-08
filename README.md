@@ -14,7 +14,7 @@
 
 Helm is a **base layer protocol for autonomous agents** -- like TCP for the agent world.
 
-Your agent doesn't know what it doesn't know. Helm measures that gap mathematically using **E8 lattice geometry** and a **3-layer filter pipeline** that catches spam, eliminates redundancy, and scores genuine novelty.
+Your agent doesn't know what it doesn't know. Helm measures that gap mathematically using **8D lattice geometry** and a **3-layer filter pipeline** that catches spam, eliminates redundancy, and scores genuine novelty.
 
 **Result:** Your agent spends HELM credits only on information that actually expands its knowledge.
 
@@ -64,7 +64,7 @@ curl -X POST https://your-node/api/v1/dedup \
 
 ### Oracle -- Knowledge Gap Scoring
 
-The full L1+L2+L3 pipeline. Measures what your agent doesn't know using 8D E8 lattice G-Metric.
+The full L1+L2+L3 pipeline. Measures what your agent doesn't know using 8D lattice G-Metric.
 
 ```bash
 curl -X POST https://your-node/api/v1/oracle \
@@ -141,7 +141,7 @@ Agent query
   │   ├─ XXHash3 exact match → DROP
   │   └─ Cosine similarity > 0.95 → DROP
   │
-  ├─ Layer 3: G-Metric Goldilocks (8D E8, ~15ms)
+  ├─ Layer 3: G-Metric Goldilocks (8D, ~15ms)
   │   ├─ G < 0.20 → KNOWN (cache hit)
   │   ├─ G 0.20~0.80 → NOVEL (accept + premium)
   │   └─ G > 0.80 → FRONTIER (off-topic)
@@ -207,7 +207,7 @@ X-G-Class: NOVEL
 X-Computation-Hash: a3f1...
 ```
 
-The math is the proof. G-Score is computed from E8 lattice quantization distance -- independently verifiable, deterministic, no black box.
+The math is the proof. G-Score is computed from lattice quantization distance -- independently verifiable, deterministic, no black box.
 
 ---
 
@@ -292,7 +292,7 @@ gateway/
 ├── src/
 │   ├── filter/
 │   │   ├── qkvg.rs            # 3-Layer pipeline (L1+L2+L3)
-│   │   ├── g_metric.rs        # 8D E8 G-Metric engine
+│   │   ├── g_metric.rs        # 8D G-Metric engine
 │   │   ├── socratic_mla.rs    # Shared knowledge cache
 │   │   └── proof_of_novelty.rs
 │   ├── broker/
