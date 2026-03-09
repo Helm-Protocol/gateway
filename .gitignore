@@ -1,0 +1,10 @@
+/target/
+*.env
+.env.local
+**/*.lock~
+/reports/
+*.pem
+*.key
+.fastembed_cache/
+npm/
+.claude/

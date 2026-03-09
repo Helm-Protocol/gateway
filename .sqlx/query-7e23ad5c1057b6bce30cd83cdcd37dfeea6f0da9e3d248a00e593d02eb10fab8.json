@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO api_listings\n            (id, owner_did, name, description, category,\n             endpoint_url, price_per_call_bnkr, active, call_count, subscriber_count, created_at)\n        VALUES ($1, $2, $3, $4, $5, $6, $7, true, 0, 0, NOW())\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7e23ad5c1057b6bce30cd83cdcd37dfeea6f0da9e3d248a00e593d02eb10fab8"
+}

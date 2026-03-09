@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT owner_did, name FROM api_listings WHERE id = $1 AND active = true",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "owner_did",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "6714a7a1ea3e10a4c9c49aefd016b7b7b84686e1cb13f133a3ccd2c8357ec0bf"
+}

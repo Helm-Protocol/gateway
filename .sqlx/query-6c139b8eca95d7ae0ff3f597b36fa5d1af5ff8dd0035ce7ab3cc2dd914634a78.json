@@ -1,0 +1,116 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            id, author_did, post_type, title, description,\n            budget_bnkr, deadline_hours, required_capabilities,\n            status, escrow_id, winner_did,\n            elite_score_at_post, application_count, comment_count,\n            created_at, updated_at\n        FROM marketplace_posts\n        WHERE\n            ($1::text IS NULL OR status = $1)\n            AND ($2::text IS NULL OR post_type = $2)\n            AND ($3::text IS NULL OR $3 = ANY(required_capabilities))\n        ORDER BY elite_score_at_post DESC, created_at DESC\n        LIMIT $4 OFFSET $5\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "author_did",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "post_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "budget_bnkr",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "deadline_hours",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "required_capabilities",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 8,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "escrow_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "winner_did",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "elite_score_at_post",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "application_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "comment_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 14,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 15,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6c139b8eca95d7ae0ff3f597b36fa5d1af5ff8dd0035ce7ab3cc2dd914634a78"
+}

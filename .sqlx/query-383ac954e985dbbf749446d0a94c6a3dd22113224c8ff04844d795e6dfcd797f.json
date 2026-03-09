@@ -1,0 +1,130 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT * FROM marketplace_posts WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "author_did",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "post_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "budget_bnkr",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "deadline_hours",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "required_capabilities",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 8,
+        "name": "job_detail_json",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 9,
+        "name": "subcontract_detail_json",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 10,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "escrow_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "winner_did",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "elite_score_at_post",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 14,
+        "name": "application_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 15,
+        "name": "comment_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 16,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 17,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 18,
+        "name": "budget_token",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "383ac954e985dbbf749446d0a94c6a3dd22113224c8ff04844d795e6dfcd797f"
+}

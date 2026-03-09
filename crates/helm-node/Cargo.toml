@@ -1,0 +1,61 @@
+[package]
+name = "helm-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Helm Protocol node binary"
+
+[[bin]]
+name = "helm"
+path = "src/main.rs"
+
+[dependencies]
+helm-core = { path = "../helm-core" }
+helm-net = { path = "../helm-net" }
+helm-engine = { path = "../helm-engine" }
+helm-store = { path = "../helm-store" }
+helm-agent = { path = "../helm-agent" }
+helm-token = { path = "../helm-token" }
+helm-identity = { path = "../helm-identity" }
+helm-governance = { path = "../helm-governance" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+reqwest = { version = "0.12", features = ["json"] }
+dirs = "5"
+sha3 = "0.10"
+sha2 = "0.10"
+bs58 = "0.5"
+base64 = "0.22"
+hex = "0.4"
+# HTTP Gateway
+axum = { version = "0.7", features = ["macros"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "limit", "set-header"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+tokio-util = { version = "0.7" }
+# PostgreSQL persistence (optional — enabled via `--features postgres`)
+# In-memory mode is the default (tests always use in-memory).
+sqlx = { version = "0.8", features = [
+    "runtime-tokio-rustls",
+    "postgres",
+    "uuid",
+    "json",
+    "chrono",
+    "macros",
+], optional = true }
+
+[features]
+# Enable PostgreSQL backend (requires DATABASE_URL env var at runtime).
+# `cargo build --features postgres` to compile with PostgreSQL support.
+# Tests always run without this feature to keep them fast and dependency-free.
+postgres = ["dep:sqlx"]
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tower = { version = "0.4", features = ["util"] }

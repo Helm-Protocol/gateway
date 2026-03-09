@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE local_visas SET balance_bnkr = balance_bnkr + $1 WHERE local_did = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Float8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d88d1b0e2a0d752bf53368561f5c1b3985421ddf382a4bf769cad952abab1bcd"
+}

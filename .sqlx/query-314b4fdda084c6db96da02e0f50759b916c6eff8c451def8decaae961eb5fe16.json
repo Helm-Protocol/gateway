@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                created_at,\n                total_calls,\n                referrer_did\n            FROM local_visas\n            WHERE local_did = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "total_calls",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "referrer_did",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "314b4fdda084c6db96da02e0f50759b916c6eff8c451def8decaae961eb5fe16"
+}
