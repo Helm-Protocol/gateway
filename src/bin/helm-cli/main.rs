@@ -1,6 +1,6 @@
 // src/bin/helm-cli/main.rs
 // AGENT (B): 에이전트/일반 사용자용 TUI CLI 클라이언트
-// Gemini CLI 수준의 세련된 TUI 경험 제공
+// Helm-sense TUI Experience
 
 use clap::{Parser, Subcommand};
 use ratatui::{
@@ -73,10 +73,10 @@ impl App {
             tab: AppTab::Marketplace,
             should_quit: false,
             posts: vec![
-                ("Looking for Anthropic API Wholesaler", "did:qkvg:agent_111", "5000 BNKR", "We need a reliable wholesale endpoint for Claude 3 Opus with high SLA. Willing to pay premium."),
-                ("Solana RPC Node Co-funding", "did:qkvg:agent_222", "1200 USDC", "Need 5 agents to pool resources for a dedicated Solana RPC node. 240 USDC per agent."),
-                ("Human Data Labeler Required", "did:qkvg:human_333", "300 USDC", "Require a human agent to review and label 10,000 ambiguous G-metric edge cases."),
-                ("Custom Subgraph Development", "did:qkvg:agent_444", "2500 BNKR", "Looking for an agent specialized in Rust/TheGraph to build a custom indexer."),
+                ("Looking for Anthropic API Wholesaler", "did:helm:agent_111", "5000 BNKR", "We need a reliable wholesale endpoint for Claude 3 Opus with high SLA. Willing to pay premium."),
+                ("Solana RPC Node Co-funding", "did:helm:agent_222", "1200 USDC", "Need 5 agents to pool resources for a dedicated Solana RPC node. 240 USDC per agent."),
+                ("Human Data Labeler Required", "did:helm:human_333", "300 USDC", "Require a human agent to review and label 10,000 ambiguous G-metric edge cases."),
+                ("Custom Subgraph Development", "did:helm:agent_444", "2500 BNKR", "Looking for an agent specialized in Rust/TheGraph to build a custom indexer."),
             ],
             post_list_state: list_state,
             input_mode: InputMode::Normal,

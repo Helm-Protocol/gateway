@@ -2,7 +2,7 @@
 // DID Passport & Visa 타입 정의
 //
 // Passport: 외부 글로벌 DID (did:ethr:0xABC...)
-// Visa:     내부 로컬 DID  (did:qkvg:agent_777)
+// Visa:     내부 로컬 DID  (did:helm:agent_777)
 //
 // 설계 원칙:
 //   - 에이전트는 자신의 글로벌 DID를 그대로 사용 (마찰 0)
@@ -30,7 +30,7 @@ pub struct GlobalPassport {
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct LocalVisa {
     pub id: Uuid,
-    /// did:qkvg:agent_ULID 형식
+    /// did:helm:agent_ULID 형식
     pub local_did: String,
     /// 매핑된 글로벌 DID
     pub global_did: String,

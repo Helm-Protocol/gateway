@@ -1,5 +1,5 @@
-// src/filter/qkvg.rs
-// [Day 2] Helm-sense 3-Layer 필터 엔진
+// src/filter/oracle.rs
+// [Day 2] Helm Oracle 3-Layer 필터 엔진
 //
 // 설계 (Helm_Ego.txt G-Metric + Helm_Project.txt SyncO 통합):
 //

@@ -1,14 +1,14 @@
 [package]
-name = "qkvg-gateway"
-version = "0.1.0"
+name = "helm-gateway"
+version = "0.3.0"
 edition = "2021"
-description = "Helm-sense API Gateway — AI Agent API Brokerage with G-Metric Filtering"
+description = "Helm-sense API Gateway — AI Agent Knowledge Sovereignty"
 
 [workspace]
 
 # 1. HOST (A+B): 서버 + 관리자 TUI 대시보드
 [[bin]]
-name = "qkvg-gateway"
+name = "helm-gateway"
 path = "src/main.rs"
 
 # 2. AGENT (B): 에이전트/일반 사용자용 TUI CLI 클라이언트
@@ -26,7 +26,7 @@ tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "trace", "limit", "timeout"] }
 actix-web = "4"
 
-# === TUI & CLI (Gemini CLI Standard) ===
+# === TUI & CLI ===
 ratatui = "0.26"
 crossterm = { version = "0.27", features = ["event-stream"] }
 clap = { version = "4.5", features = ["derive", "env"] }

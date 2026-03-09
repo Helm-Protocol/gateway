@@ -14,7 +14,7 @@
 //   (±) Cross-Domain: 전문+비전문 교차 (crypto+regulation, DeFi+geopolitics)
 //       → G가 중간 = 골디락스 존 (부분적 신규)
 
-use crate::filter::qkvg::{
+use crate::filter::oracle::{
     run_pipeline, FilterAction, VectorCache, layer3_goldilocks, GoldilocksVerdict,
 };
 use crate::filter::g_metric::GMetricEngine;

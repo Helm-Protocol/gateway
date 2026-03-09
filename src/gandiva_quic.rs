@@ -5,9 +5,9 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info};
-use crate::krishna_l2::KrishnaL2;
+use crate::lattice_l2::LatticeL2;
 
-pub async fn spawn_gandiva_quic_engine(port: u16, l2: Arc<KrishnaL2>) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn spawn_gandiva_quic_engine(port: u16, l2: Arc<LatticeL2>) -> Result<(), Box<dyn std::error::Error>> {
     // Generate self-signed cert for Gandiva-QUIC
     let cert = rcgen::generate_simple_self_signed(vec!["gandiva.local".into()])?;
     let cert_der = cert.cert.der().to_vec();

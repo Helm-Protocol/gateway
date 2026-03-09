@@ -71,7 +71,7 @@ impl PolymarketCrawler {
         Self::project_to_8d(&raw_vec)
     }
 
-    /// Project any dimension vector to 8D Universal E8 space
+    /// Project any dimension vector to 8D lattice space
     pub fn project_to_8d(v: &[f32]) -> Vec<f32> {
         if v.len() == 8 {
             return crate::filter::g_metric::normalize(v);

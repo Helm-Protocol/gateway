@@ -10,7 +10,7 @@ mod error;
 mod filter;
 mod gandiva_quic;
 mod grg;
-mod krishna_l2;
+mod lattice_l2;
 mod marketplace;
 mod mcp;
 mod p2p;
@@ -86,7 +86,7 @@ pub struct AppState {
     pub broker: Arc<GrandCrossApiBroker>,
     pub tariff: Arc<TariffEngine>,
     pub g_engine: Arc<GMetricEngine>,
-    pub krishna: Arc<krishna_l2::KrishnaL2>,
+    pub lattice: Arc<lattice_l2::LatticeL2>,
     pub market: Arc<HelmMemoryMarket>,
     pub payment_processor: Arc<X402PaymentProcessor>,
     pub multi_token: Arc<MultiTokenProcessor>,
@@ -183,7 +183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let core_client = HelmCoreServiceClient::new(core_channel);
 
     let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
-    let krishna = Arc::new(krishna_l2::KrishnaL2::new(&redis_url)?);
+    let lattice = Arc::new(lattice_l2::LatticeL2::new(&redis_url).await?);
     let market = Arc::new(HelmMemoryMarket::new(100.0)); // Base price 100 BNKR
     let billing = Arc::new(parking_lot::Mutex::new(BillingLedger::new()));
     let jwt_secret = secrecy::SecretString::from(std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret".into()));
@@ -198,7 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )),
         tariff: Arc::new(TariffEngine::default()),
         g_engine: Arc::new(GMetricEngine::default()),
-        krishna,
+        lattice,
         market,
         billing,
         payment_processor: Arc::new(X402PaymentProcessor::new(10_000)),
@@ -222,7 +222,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Gandiva-QUIC Spawn
     let quic_port: u16 = std::env::var("QUIC_PORT").unwrap_or_else(|_| "4433".into()).parse().unwrap_or(4433);
-    let quic_l2 = main_state.krishna.clone();
+    let quic_l2 = main_state.lattice.clone();
     tokio::spawn(async move {
         let _ = gandiva_quic::spawn_gandiva_quic_engine(quic_port, quic_l2).await;
     });

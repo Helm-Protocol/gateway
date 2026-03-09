@@ -1,12 +1,12 @@
 // src/filter/mod.rs
 pub mod g_metric;
-pub mod qkvg;
+pub mod oracle;
 
 pub use g_metric::{
     cosine_similarity, normalize, orthogonal_component,
     GClass, GDecomposition, GMetricEngine, GMetricResult, SfeAnalogMetrics,
 };
-pub use qkvg::{
+pub use oracle::{
     layer1_heuristic, layer2_dedup, layer3_goldilocks, run_pipeline,
     FilterAction, FilterDecision, GoldilocksResult, GoldilocksVerdict,
     L1DropReason, L1Result, L2Result, VectorCache,

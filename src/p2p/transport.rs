@@ -100,7 +100,7 @@ pub fn build_secure_transport(
 pub fn get_bootstrap_peers() -> Vec<(&'static str, &'static str)> {
     vec![
         // format: (peer_id, multiaddr)
-        // Genesis Node (Jay's GCP — Day 31 이후 제거)
+        // Genesis Node (Day 31 이후 제거)
         // 실제 배포 시 환경변수로 주입
     ]
 }

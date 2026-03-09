@@ -7,7 +7,7 @@
 //      (키 없는 dev 환경에서는 xxh3 fallback 유지)
 //
 // A-Front: Anthropic Claude + OpenAI GPT-4o
-// B-Front: Brave Search + QKV-G semantic cache
+// B-Front: Brave Search + Oracle semantic cache
 // C-Front: Pyth + CoinGecko 병렬 오라클 (절대 캐시 없음)
 // D-Front: DID 내부 평판 조회 (P2P)
 
